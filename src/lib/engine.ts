@@ -289,6 +289,14 @@ export function latestReportedMonth(ds: Dataset): number {
   return latest;
 }
 
+/** The period a reader most likely wants: the quarter containing the latest
+ *  reported month, or the full year before anything is reported. */
+export function defaultPeriod(ds: Dataset): Period {
+  const latest = latestReportedMonth(ds);
+  if (latest === 0) return { kind: 'year', index: 1 };
+  return { kind: 'quarter', index: Math.ceil(latest / 3) };
+}
+
 /** Perspective-level score for one unit, for the heatmap. */
 export function unitPerspectiveScore(
   ds: Dataset,
