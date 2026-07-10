@@ -181,6 +181,7 @@ CREATE TABLE "units" (
 	"name" text NOT NULL,
 	"slug" text NOT NULL,
 	"type" "unit_type" DEFAULT 'LOB' NOT NULL,
+	"weight" numeric(5, 2) DEFAULT '1' NOT NULL,
 	"logo_key" text,
 	"sort_order" integer DEFAULT 0 NOT NULL,
 	"active" boolean DEFAULT true NOT NULL,

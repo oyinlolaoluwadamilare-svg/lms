@@ -1,5 +1,5 @@
 {
-  "id": "a3c6a0f3-77c6-4e18-b3f0-04d1d6a4292f",
+  "id": "71f2b362-7fe0-4fd6-96ab-7ca6f2c3c40f",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -1751,6 +1751,13 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'LOB'"
+        },
+        "weight": {
+          "name": "weight",
+          "type": "numeric(5, 2)",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'1'"
         },
         "logo_key": {
           "name": "logo_key",

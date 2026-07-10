@@ -48,6 +48,7 @@ export const units = pgTable('units', {
   name: text('name').notNull(),
   slug: text('slug').notNull().unique(),
   type: unitTypeEnum('type').notNull().default('LOB'),
+  weight: numeric('weight', { precision: 5, scale: 2 }).notNull().default('1'),
   logoKey: text('logo_key'),
   sortOrder: integer('sort_order').notNull().default(0),
   active: boolean('active').notNull().default(true),
