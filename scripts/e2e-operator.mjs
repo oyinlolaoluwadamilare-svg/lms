@@ -17,7 +17,9 @@ const run = async () => {
   await page.waitForURL('**/report**', { timeout: 15000 });
   console.log('login -> /report OK');
 
-  // 2. Enter a July actual for Advisory revenue and save
+  // 2. Enter a July actual for Advisory revenue and save (month pinned so
+  // the test is deterministic regardless of what is already reported)
+  await page.goto(`${BASE}/report?m=7`);
   const input = page.getByLabel('Advisory revenue actual for Jul');
   await input.fill('21.5');
   // Live attainment should appear before saving (21.5 / 19.8 = 108.59 -> 109%)

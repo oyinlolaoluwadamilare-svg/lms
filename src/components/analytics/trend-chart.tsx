@@ -34,7 +34,7 @@ export function TrendChart({ data, series }: { data: TrendPoint[]; series: strin
           domain={[0, 150]}
         />
         <Tooltip
-          formatter={(value: number | string) => [`${Math.round(Number(value))}%`]}
+          formatter={(value) => [`${Math.round(Number(value ?? 0))}%`]}
           contentStyle={{ fontSize: 12, borderRadius: 8, borderColor: 'var(--color-line)' }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />

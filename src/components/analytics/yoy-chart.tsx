@@ -25,7 +25,7 @@ export function YoyChart({ rows, years }: { rows: YoyRow[]; years: string[] }) {
         <XAxis dataKey="name" tickLine={false} axisLine={false} tick={{ fontSize: 11 }} interval={0} />
         <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 12 }} unit="%" width={44} domain={[0, 150]} />
         <Tooltip
-          formatter={(value: number | string) => [`${Math.round(Number(value))}%`]}
+          formatter={(value) => [`${Math.round(Number(value ?? 0))}%`]}
           contentStyle={{ fontSize: 12, borderRadius: 8, borderColor: 'var(--color-line)' }}
         />
         <Legend wrapperStyle={{ fontSize: 12 }} />

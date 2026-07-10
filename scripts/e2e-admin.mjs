@@ -56,9 +56,13 @@ const run = async () => {
   await annual.fill('40');
   await admin.selectOption('select[name=phasing]', 'seasonal');
   await admin.getByRole('button', { name: 'Save annual target' }).first().click();
-  await admin.waitForLoadState('networkidle');
-  await admin.goto(admin.url());
-  const jan = await admin.locator('input[name=m1]').first().inputValue();
+  // Poll: the server action writes twelve monthly rows before the page shows them.
+  let jan = '';
+  for (let attempt = 0; attempt < 10 && jan !== '2.4'; attempt++) {
+    await admin.waitForTimeout(1000);
+    await admin.goto(admin.url());
+    jan = await admin.locator('input[name=m1]').first().inputValue();
+  }
   if (jan !== '2.4') throw new Error(`expected seasonal Jan target 2.4, got ${jan}`);
   console.log('seasonal target phasing OK');
 

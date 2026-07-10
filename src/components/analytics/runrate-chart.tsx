@@ -44,9 +44,12 @@ export function RunRateChart({ rows }: { rows: RunRateRow[] }) {
           tick={{ fontSize: 12 }}
         />
         <Tooltip
-          formatter={(value: number | string, _key, item) => {
-            const row = item?.payload as RunRateRow | undefined;
-            return [row ? `${Math.round(Number(value))}%. ${row.detail}` : `${value}%`, 'Projected'];
+          formatter={(value, _key, item) => {
+            const row = (item as { payload?: RunRateRow } | undefined)?.payload;
+            return [
+              row ? `${Math.round(Number(value ?? 0))}%. ${row.detail}` : `${Number(value ?? 0)}%`,
+              'Projected',
+            ];
           }}
           contentStyle={{ fontSize: 12, borderRadius: 8, borderColor: 'var(--color-line)' }}
         />

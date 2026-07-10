@@ -45,12 +45,12 @@ export function BulletChart({ rows }: { rows: BulletRow[] }) {
           tick={{ fontSize: 12 }}
         />
         <Tooltip
-          formatter={(value: number | string, _key, item) => {
-            const row = item?.payload as BulletRow | undefined;
+          formatter={(value, _key, item) => {
+            const row = (item as { payload?: BulletRow } | undefined)?.payload;
             return [
               row
-                ? `${Math.round(Number(value))}% (target ${row.targetLabel}, actual ${row.actualLabel})`
-                : `${Math.round(Number(value))}%`,
+                ? `${Math.round(Number(value ?? 0))}% (target ${row.targetLabel}, actual ${row.actualLabel})`
+                : `${Math.round(Number(value ?? 0))}%`,
               'Attainment',
             ];
           }}
