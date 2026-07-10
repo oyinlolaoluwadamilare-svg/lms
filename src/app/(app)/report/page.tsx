@@ -8,13 +8,14 @@ import {
   monthsInPeriod,
   unitScore,
 } from '@/lib/engine';
-import { monthName, periodLabel } from '@/lib/format';
+import { monthName, periodLabel, periodToParam } from '@/lib/format';
 import { PeriodBar } from '@/components/nav/period-bar';
 import { MonthPicker } from '@/components/report/month-picker';
 import { ActualsGrid, type ActualsRow } from '@/components/report/actuals-grid';
 import { SubmitPanel } from '@/components/report/submit-panel';
 import { InitiativeManager } from '@/components/report/initiative-manager';
 import { KpiTable } from '@/components/unit/kpi-table';
+import { AiPanel } from '@/components/ai/ai-panel';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select } from '@/components/ui/input';
 import type { KpiResult } from '@/lib/types';
@@ -170,6 +171,14 @@ export default async function ReportPage({ searchParams }: { searchParams: Searc
           <SubmitPanel unitId={unitId} year={year} period={period} submission={submission} />
         </CardBody>
       </Card>
+
+      <AiPanel
+        title="Suggest corrective initiatives"
+        description="Reads the at-risk and off-track KPIs and proposes practical fixes. You decide what to add."
+        endpoint="/api/ai/suggest-initiatives"
+        payload={{ unitId, year, period: periodToParam(period) }}
+        buttonLabel="Suggest initiatives"
+      />
 
       <Card>
         <CardHeader>

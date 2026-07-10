@@ -28,6 +28,7 @@ import { YoyChart, type YoyRow } from '@/components/analytics/yoy-chart';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Select } from '@/components/ui/input';
+import { AiPanel } from '@/components/ai/ai-panel';
 import { ragFor } from '@/lib/engine';
 
 export const metadata = { title: 'Analytics | Workforce Group CPMS' };
@@ -150,6 +151,23 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Se
         </div>
       </div>
 
+      <div className="grid gap-4 lg:grid-cols-2">
+        <AiPanel
+          title="Ask the data"
+          description="Answers come only from the computed scorecard, never from guesswork."
+          endpoint="/api/ai/ask"
+          payload={{ year, period: periodToParam(period) }}
+          askMode
+        />
+        <AiPanel
+          title="Period insight"
+          description="A short written read on the selected period."
+          endpoint="/api/ai/period-insight"
+          payload={{ year, period: periodToParam(period) }}
+          buttonLabel="Write the insight"
+        />
+      </div>
+
       <Card>
         <CardHeader>
           <CardTitle>Performance trend by unit</CardTitle>
@@ -232,6 +250,20 @@ export default async function AnalyticsPage({ searchParams }: { searchParams: Se
           </CardBody>
         </Card>
 
+        <AiPanel
+          title="Variance and anomaly detection"
+          description="Flags unusual movements so nothing hides inside a green average."
+          endpoint="/api/ai/anomalies"
+          payload={{ year }}
+          buttonLabel="Scan for anomalies"
+        />
+        <AiPanel
+          title="Year-end projection, explained"
+          description="Whether each target is in reach at the current run rate, assumption stated."
+          endpoint="/api/ai/projection"
+          payload={{ year }}
+          buttonLabel="Write the outlook"
+        />
         <Card>
           <CardHeader>
             <CardTitle>Year on year</CardTitle>

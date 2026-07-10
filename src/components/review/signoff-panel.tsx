@@ -13,6 +13,28 @@ export function SignoffPanel({ submissionId }: { submissionId: string }) {
   const [comment, setComment] = useState('');
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [assist, setAssist] = useState<string | null>(null);
+  const [assisting, setAssisting] = useState(false);
+
+  async function reviewAssist() {
+    setAssisting(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/ai/review-assist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ submissionId }),
+      });
+      const data = await res.json();
+      if (data.configured === false) setError(data.message);
+      else if (data.error) setError(data.error);
+      else setAssist(data.result ?? '');
+    } catch {
+      setError('The assistant could not be reached.');
+    } finally {
+      setAssisting(false);
+    }
+  }
 
   function run(kind: 'approve' | 'return') {
     const fd = new FormData();
@@ -33,6 +55,19 @@ export function SignoffPanel({ submissionId }: { submissionId: string }) {
 
   return (
     <div className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-xs text-charcoal/50">
+          The assistant can suggest questions for the unit and a rating rationale. You decide.
+        </p>
+        <Button variant="ghost" size="sm" disabled={assisting} onClick={reviewAssist}>
+          {assisting ? 'Thinking…' : '✦ Review assist'}
+        </Button>
+      </div>
+      {assist && (
+        <div className="text-sm text-charcoal/80 whitespace-pre-wrap bg-surface rounded-lg p-3 border border-line">
+          {assist}
+        </div>
+      )}
       <div className="grid gap-3 sm:grid-cols-[10rem_1fr]">
         <div>
           <label htmlFor="rating" className="block text-sm font-semibold text-charcoal mb-1">

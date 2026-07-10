@@ -5,6 +5,7 @@ import { resolvePeriodContext, type SearchParams } from '@/lib/page-params';
 import { unitScore } from '@/lib/engine';
 import { formatAttainment, formatDate, periodLabel, submissionStatusLabel } from '@/lib/format';
 import { RagBadge } from '@/components/rag-badge';
+import { AiPanel } from '@/components/ai/ai-panel';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table';
 import type { Submission } from '@/lib/types';
@@ -66,6 +67,14 @@ export default async function ReviewPage({ searchParams }: { searchParams: Searc
           Submitted periods awaiting EMT sign-off, then recent decisions.
         </p>
       </div>
+
+      <AiPanel
+        title="Executive summary"
+        description="A board-ready read of the period across the whole group: headline, risks, where to focus. Edit before adopting."
+        endpoint="/api/ai/exec-summary"
+        payload={{ year }}
+        buttonLabel="Write the summary"
+      />
 
       <Card>
         <CardHeader>

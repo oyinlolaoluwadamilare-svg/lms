@@ -24,9 +24,40 @@ export function SubmitPanel({
   const [pending, startTransition] = useTransition();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [drafting, setDrafting] = useState(false);
 
   const status = submission?.status ?? null;
   const locked = status === 'submitted' || status === 'approved';
+
+  async function draftWithAI() {
+    setDrafting(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await fetch('/api/ai/narrative', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          unitId,
+          year,
+          period: `${period.kind === 'year' ? 'year' : period.kind[0] + period.index}`,
+        }),
+      });
+      const data = await res.json();
+      if (data.configured === false) {
+        setError(data.message);
+      } else if (data.error) {
+        setError(data.error);
+      } else {
+        setNarrative(data.result ?? '');
+        setMessage('Draft generated. Edit it before submitting; it is not saved yet.');
+      }
+    } catch {
+      setError('The assistant could not be reached.');
+    } finally {
+      setDrafting(false);
+    }
+  }
 
   function run(action: (fd: FormData) => Promise<void>, success: string) {
     const fd = new FormData();
@@ -86,6 +117,9 @@ export function SubmitPanel({
       />
 
       <div className="flex flex-wrap items-center gap-2">
+        <Button variant="ghost" disabled={locked || pending || drafting} onClick={draftWithAI}>
+          {drafting ? 'Drafting…' : '✦ Draft with AI'}
+        </Button>
         <Button
           variant="secondary"
           disabled={locked || pending}

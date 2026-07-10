@@ -1,4 +1,5 @@
 import { createKpi, deleteKpi, updateKpi } from '@/actions/admin';
+import { AiPanel } from '@/components/ai/ai-panel';
 import { Button } from '@/components/ui/button';
 import { ConfirmButton } from '@/components/ui/confirm-button';
 import { Input, Label, Select } from '@/components/ui/input';
@@ -143,6 +144,14 @@ export function KpisTab({
           </CardBody>
         </Card>
       ))}
+
+      <AiPanel
+        title="Suggest KPIs"
+        description={`Proposes measurable KPIs for ${unit.name} from its objectives, perspectives, and aspiration. Review, then create the ones you adopt below.`}
+        endpoint="/api/ai/suggest-kpis"
+        payload={{ unitId: unit.id, year }}
+        buttonLabel="Suggest KPIs"
+      />
 
       <Card>
         <CardHeader>
