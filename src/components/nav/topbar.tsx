@@ -29,6 +29,7 @@ export function Topbar({
     links.push({ href: '/dashboard', label: 'Dashboard' });
   }
   if (role === 'emt') links.push({ href: '/review', label: 'Review' });
+  if (role === 'lob') links.push({ href: '/targets', label: 'Targets' });
   links.push({ href: '/analytics', label: 'Analytics' });
   links.push({ href: '/documents', label: 'Documents' });
   if (role === 'csst') links.push({ href: '/admin', label: 'Administration' });

@@ -11,6 +11,9 @@ export const auth = betterAuth({
     enabled: true,
     // The pilot's demo credentials are 7 characters (wfg2026).
     minPasswordLength: 7,
+    // Sign-up is only ever called server-side by CSST creating a unit's
+    // login (and the seed). It must not replace the admin's own session.
+    autoSignIn: false,
   },
   session: {
     cookieCache: {
