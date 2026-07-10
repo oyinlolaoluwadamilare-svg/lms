@@ -9,6 +9,8 @@ export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL,
   emailAndPassword: {
     enabled: true,
+    // The pilot's demo credentials are 7 characters (wfg2026).
+    minPasswordLength: 7,
   },
   session: {
     cookieCache: {
