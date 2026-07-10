@@ -2,9 +2,12 @@ import { createUnit, saveAspiration, updateUnit } from '@/actions/admin';
 import { Button } from '@/components/ui/button';
 import { Input, Label, Select, Textarea } from '@/components/ui/input';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
+import { LogoUpload } from '@/components/admin/logo-upload';
+import { isStorageConfigured } from '@/lib/storage';
 import type { Dataset } from '@/lib/types';
 
 export function UnitsTab({ ds, year }: { ds: Dataset; year: number }) {
+  const storageReady = isStorageConfigured();
   return (
     <div className="space-y-4">
       {ds.units.map((unit) => {
@@ -13,7 +16,10 @@ export function UnitsTab({ ds, year }: { ds: Dataset; year: number }) {
           <Card key={unit.id}>
             <CardHeader className="flex items-baseline justify-between gap-2">
               <CardTitle>{unit.name}</CardTitle>
-              <span className="text-xs text-charcoal/50 font-semibold">{unit.slug}@wfg.demo</span>
+              <div className="flex items-center gap-2">
+                {storageReady && <LogoUpload unitId={unit.id} hasLogo={Boolean(unit.logoKey)} />}
+                <span className="text-xs text-charcoal/50 font-semibold">{unit.slug}@wfg.demo</span>
+              </div>
             </CardHeader>
             <CardBody className="space-y-3">
               <form
