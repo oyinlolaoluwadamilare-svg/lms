@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  typecheck-lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint (includes the layering guardrail)
+        run: npm run lint
+      - name: Unit + permission + layering suites
+        run: npm run test
+      # RLS harness (tests/rls) and integration suite (tests/integration) join this
+      # job once a test Postgres / Supabase project exists from M0.2 onward. Until
+      # then they are intentionally not invoked here — see tests/rls/README.md and
+      # tests/integration/README.md.
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Playwright e2e
+        run: npm run test:e2e
