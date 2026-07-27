@@ -43,9 +43,9 @@ Tenant
 `id (matches auth user), tenant_id, full_name, email, department, job_title, timezone, date_format, avatar_url, status (active|pending|suspended|inactive), last_active_at`
 
 ### user_roles
-`id, tenant_id, user_id, role (tenant_admin|executive|director|team_lead|bdm), practice_line_id (null for tenant-wide roles), granted_by, granted_at, revoked_at`
+`id, tenant_id, user_id, role (tenant_admin|executive|director|team_lead|bde), practice_line_id (null for tenant-wide roles), granted_by, granted_at, revoked_at`
 **Invariant:** a user may hold multiple rows; effective permission is the union. `executive` and
-`tenant_admin` are tenant-wide and must have `practice_line_id is null`. `bdm` and `team_lead`
+`tenant_admin` are tenant-wide and must have `practice_line_id is null`. `bde` and `team_lead`
 must have a non-null practice line.
 
 ### pipeline_stages

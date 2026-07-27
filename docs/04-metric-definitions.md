@@ -55,7 +55,7 @@ over active deals. A leading loss indicator that most tools never surface.
 never engaged, which is displayed explicitly as "never" and is not treated as zero.
 
 **Engagement coverage.** Active deals with at least one client-facing activity in the trailing
-14 days, divided by all active deals. Scoped by role: own deals for a BDM, team for a Team Lead,
+14 days, divided by all active deals. Scoped by role: own deals for a BDE, team for a Team Lead,
 practice for a Director, tenant for Executive and Tenant Admin.
 
 **Staleness bands.** 0–7 days green, 8–21 blue, 22–45 amber, 46 or more red. Thresholds are

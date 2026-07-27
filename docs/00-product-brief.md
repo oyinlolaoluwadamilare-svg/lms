@@ -21,7 +21,7 @@ sell part-time, which means administrative burden is the single greatest adoptio
 
 ## Personas
 
-**BDM (Business Development Manager).** Owns deals within one practice line. Wants credit for work
+**BDE (Business Development Executive).** Owns deals within one practice line. Wants credit for work
 done and no duplicate data entry. Will abandon the product if logging an engagement takes longer
 than writing the same note in a notebook.
 

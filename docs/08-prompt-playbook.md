@@ -77,7 +77,7 @@ with the application layer bypassed:
 - the executive identity fails on insert, update and delete
 - a suspended user is denied everything despite holding role rows
 - the role_scope_valid constraint rejects a tenant_admin row carrying a practice_line_id
-  and a bdm row without one
+  and a bde row without one
 
 Show me the failing output first, then the passing output. Do not proceed to M0.3.
 ```
@@ -96,9 +96,9 @@ Hard requirements:
 - tests/permissions/matrix.spec.ts iterates every role and every action and FAILS if any pair
   is undefined.
 - Named deny tests, all of which must exist:
-  * bdm CAN create an activity on a deal they own      <- the predecessor's exact defect
-  * bdm CAN create an activity on a deal they co-own
-  * bdm CAN assign a task to a practice-line peer
+  * bde CAN create an activity on a deal they own      <- the predecessor's exact defect
+  * bde CAN create an activity on a deal they co-own
+  * bde CAN assign a task to a practice-line peer
   * executive CANNOT perform any write action, iterated over every write action
   * NO role can delete an activity
   * NO role can update an audit entry or stage event
@@ -151,16 +151,16 @@ Show me a diff summary and the test output. Do not start the next task.
 Implement M3.3: the RLS insert policy for activities.
 
 Context you must understand before writing anything: the predecessor product shipped an activity
-logger that was invisible and unusable to the bdm role — the only role that performs client
+logger that was invisible and unusable to the bde role — the only role that performs client
 engagement. Every test passed. The feature was around seventy per cent built and the defect went
 unnoticed for months, which is why every notes panel in that product reads "no notes captured yet".
 
 Therefore:
-- Write the policy so a bdm can insert an activity on a deal they own, co-own or authored.
-- Write the named test "a user holding ONLY the bdm role can create an activity on a deal they own".
-- Also assert the UI: render the deal page as a bdm and assert the Log Activity button is present.
+- Write the policy so a bde can insert an activity on a deal they own, co-own or authored.
+- Write the named test "a user holding ONLY the bde role can create an activity on a deal they own".
+- Also assert the UI: render the deal page as a bde and assert the Log Activity button is present.
   A server-side permission that the interface never exposes is the same defect wearing a different hat.
-- Then verify the reverse: a bdm cannot insert on a deal in a practice line they are not entitled to.
+- Then verify the reverse: a bde cannot insert on a deal in a practice line they are not entitled to.
 
 Show me all four tests failing before implementation, then passing.
 ```

@@ -22,13 +22,13 @@ Radius 9–14px · Type: system sans · Base 16px, tables 13.5px
 
 | Role | Primary nav |
 |---|---|
-| BDM | My Work · Business Lines · Pipeline Deals · Accounts · Files · Analytics |
+| BDE | My Work · Business Lines · Pipeline Deals · Accounts · Files · Analytics |
 | Team Lead | My Work · Team · Pipeline Deals · Accounts · Files · Analytics |
 | Director | Dashboard · Pipeline Deals · Accounts · Reviews · Analytics · Files |
 | Executive | Dashboard · Analytics · Pipeline (read) |
 | Tenant Admin | Dashboard · All Deals · Accounts · Analytics · Admin |
 
-**My Work is the default landing screen for BDM and Team Lead.** Landing on a task list rather than a
+**My Work is the default landing screen for BDE and Team Lead.** Landing on a task list rather than a
 record list is the strongest single nudge toward the behaviour this product is trying to create.
 
 ## Screen: Deal detail
@@ -39,7 +39,7 @@ The most important screen in the product. Layout, top to bottom, left column:
 next task and its due date, or a prominent amber "No next step — add one" call to action. A
 last-engaged chip reads "Last engaged 12 days ago" in the staleness colour, or "Never engaged" in red.
 
-**Primary actions, visible to every writing role including BDM** — Log Activity, Add Task, Edit Deal,
+**Primary actions, visible to every writing role including BDE** — Log Activity, Add Task, Edit Deal,
 Advance Stage, and under a menu: Mark Won, Mark Lost, Escalate, Add Contact.
 
 **Engagement timeline** — the centre of gravity of the page, not a footnote. Newest first, merging

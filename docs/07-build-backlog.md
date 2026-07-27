@@ -33,7 +33,10 @@ tested; cross-tenant isolation is proven.
 
 ---
 
-## M1 — Deals and pipeline 🔒 D-02, D-12
+## M1 — Deals and pipeline
+
+D-02 and D-12 are answered in `docs/DECISIONS.md` (practice-wide read/own write; stages are a
+tenant-configurable table) — this milestone is no longer blocked.
 
 **M1.1** `pipeline_stages`, `accounts`, `deals`, `deal_co_owners` migrations with all constraints,
 including the active-deal-requires-owner-and-close-date check.
@@ -69,7 +72,7 @@ Test each path: form, board, API, bulk, mark-won, mark-lost.
 constraint, the generated `is_client_facing` column, and `stage_id_at_time` capture.
 **M3.2** `logActivity` service: the single creation path, deriving `last_engaged_at`,
 `engagement_count` and the audit row in one transaction.
-**M3.3** ⚑ RLS policy for activity insert, **with the named test "a user holding only the bdm role can
+**M3.3** ⚑ RLS policy for activity insert, **with the named test "a user holding only the bde role can
 create an activity on a deal they own"**. This is the predecessor's exact defect; it must be
 impossible to regress.
 **M3.4** Log Activity modal meeting the three-interaction constraint, with keyboard shortcut and
@@ -105,7 +108,7 @@ reassign, plus the "Assigned by me" tab.
 **M4.8** Notification events for assigned, reassigned, overdue and mentioned, with per-type user
 preferences replacing coarse toggles.
 **M4.9** Comments, watchers and @mention with an in-scope user picker.
-**M4.10** ⚑ Permission tests: a BDM can assign to a practice peer; an Executive cannot assign at all;
+**M4.10** ⚑ Permission tests: a BDE can assign to a practice peer; an Executive cannot assign at all;
 reassignment history is never overwritten.
 
 **Exit:** work is delegable and chaseable; every open deal shows its next action or is flagged.
@@ -141,7 +144,7 @@ and reconstructed-event exclusion.
 to first engagement, next-action coverage — all role-scoped.
 **M6.6** Task analytics: on-time rate excluding cancellations, overdue counts, delegation load.
 **M6.7** Stage regression report.
-**M6.8** Role-scoped dashboards for BDM, Team Lead, Director and Executive.
+**M6.8** Role-scoped dashboards for BDE, Team Lead, Director and Executive.
 **M6.9** Saved views and CSV/PDF export.
 
 **Exit:** every metric traces to an event; no panel displays a figure below its minimum sample.
@@ -160,7 +163,8 @@ Google and Outlook. ⚑ **No path permits connecting another user's mailbox.**
 **M7.6** Automation rules engine with dry-run preview, versioning and a traceable run log. ⚑
 **M7.7** Default staleness rules: follow-up task at 14 days, escalate to Team Lead at 30, Director at
 45; overdue-task escalation at 72 hours.
-**M7.8** Stage-gate validation with Director override requiring a reason. 🔒 D-01.
+**M7.8** Stage-gate validation with Director override requiring a reason. D-01 is answered
+(advisory only) — gates must **not** include an engagement-logged condition.
 **M7.9** Task templates per stage per practice.
 
 **Exit:** most engagement is captured without typing; the system chases without human vigilance.
@@ -188,7 +192,7 @@ days. ⚑
 
 **M9.1** `leads` with capture, qualification, scoring and convert-to-deal preserving history.
 Unconverted leads excluded from pipeline value.
-**M9.2** Qualification framework with completeness gating. 🔒 D-01, D-05.
+**M9.2** Qualification framework with completeness gating. 🔒 D-05 (D-01 is answered: advisory only).
 **M9.3** Routing rules and response-time SLA.
 **M9.4** Source and campaign attribution through to revenue.
 **M9.5** Documents with versioning and deal linkage; templates; sequences with reply detection;

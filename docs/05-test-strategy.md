@@ -23,7 +23,7 @@ designed so that class of failure is structurally impossible.
 Generated from `docs/02-permission-matrix.md`. Structure:
 
 ```ts
-const ROLES = ['bdm','team_lead','director','executive','tenant_admin'] as const;
+const ROLES = ['bde','team_lead','director','executive','tenant_admin'] as const;
 const ACTIONS = [...] as const;   // every action string from the matrix
 
 it('every role-action pair is covered', () => {
@@ -33,9 +33,9 @@ it('every role-action pair is covered', () => {
 ```
 
 Mandatory named cases:
-- `bdm can create an activity on a deal they own` — the predecessor's exact defect.
-- `bdm can create an activity on a deal they co-own`.
-- `bdm can assign a task to a practice-line peer`.
+- `bde can create an activity on a deal they own` — the predecessor's exact defect.
+- `bde can create an activity on a deal they co-own`.
+- `bde can assign a task to a practice-line peer`.
 - `executive cannot write to any table, for every write action`.
 - `no role can delete an activity`.
 - `no role can update an audit entry or a stage event`.
@@ -46,7 +46,7 @@ Mandatory named cases:
 ## The RLS harness
 
 Connects as each role's real database identity, bypassing all application code, and asserts:
-cross-tenant select returns zero rows on every table; a BDM identity cannot update a deal outside
+cross-tenant select returns zero rows on every table; a BDE identity cannot update a deal outside
 their entitlement; the executive identity fails on insert, update and delete everywhere; update and
 delete on `stage_events` and `audit_entries` raise; an activity update outside the 24-hour window
 affects zero rows; `activities` has no delete policy at all.

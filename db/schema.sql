@@ -11,7 +11,7 @@ create extension if not exists "citext";        -- case-insensitive email
 
 -- ---------------------------------------------------------------- enums
 create type user_status      as enum ('active','pending','suspended','inactive');
-create type app_role         as enum ('tenant_admin','executive','director','team_lead','bdm');
+create type app_role         as enum ('tenant_admin','executive','director','team_lead','bde');
 create type stage_type       as enum ('open','won','lost');
 create type deal_status      as enum ('active','won','lost','on_hold');
 create type client_type      as enum ('new','existing');
@@ -82,7 +82,7 @@ create table user_roles (
   -- tenant-wide roles must NOT be scoped to a practice; scoped roles MUST be
   constraint role_scope_valid check (
     (role in ('tenant_admin','executive') and practice_line_id is null) or
-    (role in ('director','team_lead','bdm') and practice_line_id is not null)
+    (role in ('director','team_lead','bde') and practice_line_id is not null)
   )
 );
 create index on user_roles (user_id) where revoked_at is null;
@@ -406,7 +406,7 @@ create or replace function can_write() returns boolean
 language sql stable security definer as $$
   -- executive is read-only, enforced here and not merely in the UI
   select has_role('tenant_admin') or has_role('director')
-      or has_role('team_lead')   or has_role('bdm')
+      or has_role('team_lead')   or has_role('bde')
 $$;
 
 alter table deals      enable row level security;
@@ -435,7 +435,7 @@ create policy deals_update on deals for update using (
     has_role('tenant_admin')
     or (has_role('director') and practice_line_id in (select entitled_practices()))
     or (has_role('team_lead') and practice_line_id in (select entitled_practices()))
-    or (has_role('bdm') and (
+    or (has_role('bde') and (
           owner_id = auth.uid() or author_id = auth.uid()
           or exists (select 1 from deal_co_owners c where c.deal_id = id and c.user_id = auth.uid())
        ))
@@ -443,7 +443,7 @@ create policy deals_update on deals for update using (
 );
 -- NOTE: no delete policy on deals. Soft delete only, via an update setting deleted_at.
 
--- Activities: THE regression guard — a bdm must be able to insert on their own deal
+-- Activities: THE regression guard — a bde must be able to insert on their own deal
 create policy activities_insert on activities for insert with check (
   tenant_id = current_tenant_id() and can_write() and exists (
     select 1 from deals d where d.id = deal_id and d.tenant_id = current_tenant_id() and (
@@ -460,7 +460,7 @@ create policy activities_insert on activities for insert with check (
 create policy activities_select on activities for select using (
   tenant_id = current_tenant_id() and (
     has_role('tenant_admin')
-    or has_role('executive')     -- pending decision D-06
+    or has_role('executive')     -- D-06: confirmed, executive reads full narratives
     or exists (select 1 from deals d where d.id = deal_id
                and d.practice_line_id in (select entitled_practices()))
   )

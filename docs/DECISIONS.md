@@ -13,20 +13,6 @@ When a question is answered, move it to Part B with the date and the person who 
 
 ## Part A — Open questions blocking implementation
 
-### D-01 — Is activity logging mandatory before stage advancement?
-**Blocks:** stage-gate rules (M6), engagement enforcement (M3).
-**Options:** (a) advisory only, visibility and staleness flags do the work; (b) require at least one
-client-facing activity in the current stage before advancing; (c) configurable per practice line.
-**Consideration:** (b) drives compliance but invites junk entries; (a) risks nothing being logged.
-**Recommendation to confirm:** (c), defaulting to (a) at launch and tightening once adoption holds.
-
-### D-02 — Can a BDM see deals owned by peers within the same practice line?
-**Blocks:** RLS policy shape, assignee pickers, all "team" views.
-**Options:** (a) own, co-owned and authored deals only; (b) full read across the practice line, write
-on own only; (c) practice-wide read but values masked on others' deals.
-**Consideration:** this is the most structurally consequential permission decision in the product;
-retrofitting it later means rewriting every policy. Decide before Milestone 1.
-
 ### D-03 — Who owns an account when several practice lines sell into the same client?
 **Blocks:** account model, account 360 visibility, cross-sell reporting.
 **Options:** (a) single global account owner; (b) one account with per-practice relationship owners;
@@ -43,11 +29,6 @@ practice runs a different calendar.
 **Blocks:** the velocity metric and the qualification gate.
 **Options:** (a) entry into Discovery Call; (b) qualification completeness at or above a threshold;
 (c) explicit manual qualification flag.
-
-### D-06 — Should the Executive role be able to read engagement narratives, or only aggregates?
-**Blocks:** RLS on the activities table.
-**Consideration:** this is a culture and trust decision as much as a technical one. If sellers
-believe executives read every note, note quality degrades toward the performative.
 
 ### D-07 — Is email body content stored, or only metadata?
 **Blocks:** mail synchronisation design, data protection posture, storage sizing.
@@ -69,18 +50,16 @@ pipeline converts at current rate while closed deals lock the rate at close.
 **Blocks:** governance implementation and any regulatory commitment.
 **Recommendation to confirm:** 30-day recycle bin, 7-year audit retention, 30-day backup retention.
 
-### D-12 — Are stage names and counts fixed at launch or tenant-configurable from day one?
-**Blocks:** whether stages are an enum or a table. **Strong recommendation:** a table with stable
-identifiers, because renaming must never break historical reporting.
-
 ---
 
 ## Part B — Decisions made
 
 | # | Decision | Rationale | Decided by | Date |
 |---|---|---|---|---|
-| D-02 | **PROVISIONAL** — (b) practice-wide read, own write: a BDM may read every deal in their practice line but write only own/co-owned/authored deals | Matches what `db/schema.sql` already implements (`deals_select` grants read via `entitled_practices()` regardless of role; `deals_update` restricts BDM writes to own/co-owned/authored). Not yet confirmed by the product owner — flagged here so it is visible and can be overridden before M1 ships. If the product owner instead wants (a) own-only read, `deals_select` must be tightened before M1.1. | Claude Code, provisional pending product-owner confirmation | 2026-07-27 |
-| D-12 | **PROVISIONAL** — stages are a tenant-scoped table with stable, immutable `code` identifiers, configurable per tenant | Matches architectural decision A-01 and the `pipeline_stages` table already in `db/schema.sql`. Not yet confirmed by the product owner. | Claude Code, provisional pending product-owner confirmation | 2026-07-27 |
+| D-01 | (a) Advisory only — activity logging is not mandatory before stage advancement. Visibility and staleness flags do the work instead. | Product owner's call. No enforcement code exists yet (stage-gate rules are M6/M7); when `FR-8.3`/M7.8 stage-gate validation is built, it must **not** include an engagement-logged condition unless this decision is revisited. | Product owner (foluso.aribisala@workforcegroup.com) | 2026-07-27 |
+| D-02 | (b) Practice-wide read, own write — a BDE may read every deal in their practice line but write only own/co-owned/authored deals | Confirmed by the product owner ("they can see but can't make changes"). Matches what `db/schema.sql` already implements (`deals_select` grants read via `entitled_practices()` regardless of role; `deals_update` restricts BDE writes to own/co-owned/authored) — no schema change was needed. Supersedes the earlier provisional entry. | Product owner (foluso.aribisala@workforcegroup.com) | 2026-07-27 |
+| D-06 | Yes — the Executive role may read full engagement narratives, not just aggregates | Confirmed by the product owner. Matches `db/schema.sql`'s `activities_select` policy, which already grants `has_role('executive')` unrestricted read; the "pending decision D-06" comment there has been removed now that it's resolved. `docs/02-permission-matrix.md`'s footnote is updated to match. | Product owner (foluso.aribisala@workforcegroup.com) | 2026-07-27 |
+| D-12 | Stages are a tenant-scoped table with stable, immutable `code` identifiers, configurable per tenant | Confirmed by the product owner. Matches architectural decision A-01 and the `pipeline_stages` table already in `db/schema.sql` — no schema change was needed. | Product owner (foluso.aribisala@workforcegroup.com) | 2026-07-27 |
 
 ---
 

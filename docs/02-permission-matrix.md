@@ -2,7 +2,7 @@
 
 ## Why this file exists
 
-The predecessor product shipped an engagement logger that was invisible to the BDM role — the only
+The predecessor product shipped an engagement logger that was invisible to the BDE role — the only
 role that needed it. Every test passed, because the tests asserted what roles *could* do and never
 what they *could not*. The feature was roughly seventy per cent built and nobody noticed for months,
 which is why every notes panel in that product read "no notes captured yet".
@@ -27,7 +27,7 @@ implemented as data, not as scattered conditionals.
 | `executive` | Whole tenant | **Never. Read-only, enforced in RLS.** |
 | `director` | One or more practice lines | Yes, within practice |
 | `team_lead` | One practice line | Yes, within practice |
-| `bdm` | One practice line, own deals | Yes, own records |
+| `bde` | One practice line, own deals | Yes, own records |
 
 **Scope tokens:** `own` = user is owner, co-owner or author · `practice` = any record in an
 entitled practice line · `tenant` = anything in the tenant · `—` = denied.
@@ -35,7 +35,7 @@ entitled practice line · `tenant` = anything in the tenant · `—` = denied.
 ## Matrix
 
 ### Deals
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | deal.view | practice¹ | practice | practice | tenant | tenant |
 | deal.create | practice | practice | practice | — | tenant |
@@ -51,11 +51,11 @@ entitled practice line · `tenant` = anything in the tenant · `—` = denied.
 | deal.soft_delete | — | — | practice | — | tenant |
 | deal.restore | — | — | — | — | tenant |
 
-¹ Subject to open decision **D-02**. Until D-02 is answered, implement `own` and leave a single
-documented switch point. Do not guess.
+¹ Confirmed by decision **D-02** (`docs/DECISIONS.md`): practice-wide read. Write actions on the
+same table remain scoped to `own` for a BDE, as shown below.
 
 ### Activities — the critical rows
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | **activity.create** | **own** | **practice** | **practice** | **—** | **tenant** |
 | activity.view | practice | practice | practice | tenant² | tenant |
@@ -65,13 +65,14 @@ documented switch point. Do not guess.
 | activity.delete | **— (no role, ever)** | — | — | — | — |
 | activity.attach_file | own | practice | practice | — | tenant |
 
-² Subject to open decision **D-06**.
+² Confirmed by decision **D-06** (`docs/DECISIONS.md`): Executive reads full narratives, not only
+aggregates.
 
-**Regression test that must exist:** *"a user holding only the bdm role can create an activity on a
+**Regression test that must exist:** *"a user holding only the bde role can create an activity on a
 deal they own."* This single assertion would have caught the predecessor's most damaging defect.
 
 ### Tasks
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | task.create | practice | practice | practice | — | tenant |
 | task.view | own+assigned+practice | practice | practice | tenant | tenant |
@@ -84,10 +85,10 @@ deal they own."* This single assertion would have caught the predecessor's most 
 | task.comment | visible | visible | visible | — | visible |
 | task.mention_user | practice | practice | practice | — | tenant |
 
-³ A BDM may assign to deal co-owners, their team lead, and practice-line peers.
+³ A BDE may assign to deal co-owners, their team lead, and practice-line peers.
 
 ### Accounts and contacts
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | account.view | practice | practice | practice | tenant | tenant |
 | account.create / update | practice | practice | practice | — | tenant |
@@ -97,7 +98,7 @@ deal they own."* This single assertion would have caught the predecessor's most 
 | contact.link_to_deal | own | practice | practice | — | tenant |
 
 ### Analytics, forecast and quotas
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | analytics.view_own | yes | yes | yes | yes | yes |
 | analytics.view_team | — | practice | practice | tenant | tenant |
@@ -110,7 +111,7 @@ deal they own."* This single assertion would have caught the predecessor's most 
 | forecast.override_others | — | practice | practice | — | tenant |
 
 ### Files and documents
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | document.view | practice | practice | practice | tenant | tenant |
 | document.upload | practice | practice | practice | — | tenant |
@@ -118,7 +119,7 @@ deal they own."* This single assertion would have caught the predecessor's most 
 | document.soft_delete | uploader | practice | practice | — | tenant |
 
 ### Administration
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | admin.view_panel | — | — | — | — | tenant |
 | admin.manage_stages | — | — | — | — | tenant |
@@ -134,11 +135,11 @@ deal they own."* This single assertion would have caught the predecessor's most 
 | admin.request_restore | — | — | — | — | tenant |
 | admin.purge (hard delete) | **— (platform super admin only, out of band)** | — | — | — | — |
 
-⁴ Only when the tenant-level "Team Lead practice invites" setting is enabled, and only for the `bdm`
+⁴ Only when the tenant-level "Team Lead practice invites" setting is enabled, and only for the `bde`
 role within the lead's own practice line, and only within the seat cap.
 
 ### Integrations
-| Action | bdm | team_lead | director | executive | tenant_admin |
+| Action | bde | team_lead | director | executive | tenant_admin |
 |---|---|---|---|---|---|
 | integration.connect_own_mailbox | yes (self only) | yes | yes | — | yes |
 | integration.connect_for_other_user | **— (no role, ever)** | — | — | — | — |
@@ -158,7 +159,7 @@ role within the lead's own practice line, and only within the seat cap.
 
 ```ts
 // tests/permissions/matrix.spec.ts
-const ROLES = ['bdm','team_lead','director','executive','tenant_admin'] as const;
+const ROLES = ['bde','team_lead','director','executive','tenant_admin'] as const;
 const ACTIONS = [/* every action string in this document */] as const;
 
 describe('permission matrix completeness', () => {
@@ -174,7 +175,7 @@ describe('deny cases', () => {
     for (const action of ACTIONS.filter(isWrite))
       expect(can(executiveUser, action, anyResource)).toBe(false);
   });
-  it('bdm CAN create an activity on an owned deal', async () => {
+  it('bde CAN create an activity on an owned deal', async () => {
     expect(can(bdmUser, 'activity.create', ownedDeal)).toBe(true); // the regression guard
   });
   it('no role can delete an activity', async () => {
