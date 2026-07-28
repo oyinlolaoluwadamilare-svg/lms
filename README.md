@@ -9,7 +9,7 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.2.
+   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.3.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -28,8 +28,14 @@ reversible migrations (`db/migrations`) with the `current_tenant_id`/`has_role`/
 `tests/rls/foundation.spec.ts` proving cross-tenant isolation, the executive identity failing
 every write, a suspended user denied despite holding role rows, and the `role_scope_valid`
 constraint — connecting as each role's real database identity with the application layer
-bypassed entirely. No product tables, routes or features exist yet — see
-`docs/07-build-backlog.md` for what M0.3 onward brings.
+bypassed entirely.
+
+**M0.3** (auth) is in place: Supabase-Auth-backed sign-in, password reset and session handling via
+`middleware.ts` and `src/services/session.ts`, and suspended/inactive-user denial enforced by RLS
+itself rather than application logic (`getSessionUser` treats "no matching active `users` row" as
+denied and tears the session down). No self-service account creation — public signup is disabled
+at the Supabase project level, not just omitted from the UI. No product tables, routes or features
+beyond auth exist yet — see `docs/07-build-backlog.md` for what M0.4 onward brings.
 
 ## Commands
 
