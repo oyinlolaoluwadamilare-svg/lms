@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 
-// M0.1 scaffold smoke test only. The first real e2e journey (per-role primary
-// path) lands with its owning milestone in docs/07-build-backlog.md.
-test("app shell renders", async ({ page }) => {
+// M0.3 supersedes the M0.1 scaffold assertion: "/" now requires an active session (see
+// src/services/session.ts), so an unauthenticated visit redirects to sign-in rather than
+// rendering the placeholder directly.
+test("unauthenticated visit to the app shell redirects to sign-in", async ({ page }) => {
   await page.goto("/");
+  await expect(page).toHaveURL(/\/sign-in/);
   await expect(page).toHaveTitle("Pipeline Intelligence");
-  await expect(page.locator("body")).toContainText("scaffold (M0.1)");
 });
