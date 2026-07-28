@@ -5,6 +5,14 @@ Connects as each role's real database identity, with the application layer bypas
 isolation on `tenants`/`practice_lines`/`users`/`user_roles`, the executive identity failing every
 write, a suspended user denied despite holding role rows, and the `role_scope_valid` constraint.
 
+`cross_tenant_isolation.spec.ts` proves M0.5's exit criterion: every one of the five role
+identities (`tenant_admin`/`executive`/`director`/`team_lead`/`bde` — the first two were the only
+ones exercised until M0.5) reads zero rows of another tenant's data, on every one of the four
+existing tables, as an explicit matrix rather than a few spot-checked cases. The guardrail was
+verified to actually fire, not just look correct: `alter table tenants disable row level
+security` made every identity's isolation test fail immediately, and re-enabling it restored a
+clean pass.
+
 **Rule that must hold from here on:** adding a tenant-scoped table without a corresponding RLS
 test file in this directory fails CI (see the `rls` job in `.github/workflows/ci.yml`).
 

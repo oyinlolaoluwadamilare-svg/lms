@@ -9,7 +9,7 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.4.
+   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.5.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -44,8 +44,15 @@ deny/allow cases from the document (bde can log an activity on an owned or co-ow
 any other's; bde can assign a task to a practice peer but not outside it; executive cannot write
 anything; no role can delete an activity, hard-delete, or connect another user's mailbox; a
 suspended or inactive user is denied everything; cross-tenant access is impossible for every role
-including tenant_admin). No product tables, routes or features beyond auth/permissions exist yet —
-see `docs/07-build-backlog.md` for what M0.5 onward brings.
+including tenant_admin).
+
+**M0.5** (RLS test harness) is in place: `tests/rls/cross_tenant_isolation.spec.ts` proves cross-
+tenant isolation as an explicit matrix across every one of the five role identities x every one of
+the four existing tables — `director` and `team_lead` were entirely untested by M0.2's suite,
+which only exercised `tenant_admin`, `executive` and `bde`. Verified live, not just by inspection:
+disabling RLS on `tenants` made every identity's isolation test fail immediately; re-enabling it
+restored a clean pass. No product tables, routes or features beyond auth/permissions exist yet —
+see `docs/07-build-backlog.md` for what M0.6 onward brings.
 
 ## Commands
 
