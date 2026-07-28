@@ -21,10 +21,38 @@ jobs:
         run: npm run lint
       - name: Unit + permission + layering suites
         run: npm run test
-      # RLS harness (tests/rls) and integration suite (tests/integration) join this
-      # job once a test Postgres / Supabase project exists from M0.2 onward. Until
-      # then they are intentionally not invoked here — see tests/rls/README.md and
-      # tests/integration/README.md.
+      # tests/integration joins this job once src/data repositories exist, from M1 onward
+      # (see tests/integration/README.md). RLS has its own job below, from M0.2 onward.
+
+  rls:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PGPASSWORD: postgres
+      PSQL_SUPERUSER_CMD: psql -h 127.0.0.1 -U postgres
+      MIGRATOR_DATABASE_URL: postgres://app_migrator:migrator_local_dev@127.0.0.1:5432/pipeline_intelligence
+      AUTHENTICATED_DATABASE_URL: postgres://authenticated:authenticated_local_dev@127.0.0.1:5432/pipeline_intelligence
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Set up schema, RLS and the local auth shim (docs/05-test-strategy.md)
+        run: npm run db:setup:local
+      - name: RLS foundation suite
+        run: npm run test:rls
 
   e2e:
     runs-on: ubuntu-latest

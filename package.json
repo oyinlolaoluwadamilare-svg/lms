@@ -14,10 +14,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:rls": "vitest run --config vitest.rls.config.ts",
+    "db:migrate": "node db/migrate.mjs up",
+    "db:migrate:down": "node db/migrate.mjs down",
+    "db:setup:local": "bash scripts/db-setup-local.sh",
     "ci": "npm run typecheck && npm run lint && npm run test && npm run test:e2e"
   },
   "dependencies": {
     "next": "^15.5.4",
+    "pg": "^8.13.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "zod": "^3.24.1"
@@ -27,6 +32,7 @@
     "@playwright/test": "^1.49.1",
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.7",
+    "@types/pg": "^8.11.10",
     "@types/react-dom": "^19.0.3",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.18.0",
