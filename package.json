@@ -15,8 +15,8 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:rls": "vitest run --config vitest.rls.config.ts",
-    "db:migrate": "node db/migrate.mjs up",
-    "db:migrate:down": "node db/migrate.mjs down",
+    "db:migrate": "node --env-file-if-exists=.env.local db/migrate.mjs up",
+    "db:migrate:down": "node --env-file-if-exists=.env.local db/migrate.mjs down",
     "db:setup:local": "bash scripts/db-setup-local.sh",
     "ci": "npm run typecheck && npm run lint && npm run test && npm run test:e2e"
   },
