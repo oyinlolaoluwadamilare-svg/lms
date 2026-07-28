@@ -9,7 +9,7 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.6.
+   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.7.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -63,9 +63,23 @@ RLS never restricts a table's owner or a `bypassrls` role, and `service_role` ha
 for this table. `tests/rls/audit_log.spec.ts` proves no authenticated identity of any role can
 insert or mutate a row and that read access matches `admin.view_audit_log`; the append-only
 guarantee was also verified by hand against a live local Postgres (`update`/`delete` as the
-`postgres` superuser both raised) before being turned into a permanent test. No product tables,
-routes or features beyond auth/permissions/audit exist yet — see `docs/07-build-backlog.md` for
-what M0.7 onward brings.
+`postgres` superuser both raised) before being turned into a permanent test.
+
+**M0.7** (design tokens, layout shell, role-aware navigation, standard states) is in place: an
+`app/(app)` route group with a persistent shell (`src/ui/shell/AppShell.tsx`) and role-derived
+navigation (`src/domain/navigation.ts`, matching `docs/06-ui-spec.md`'s per-role nav table
+verbatim, merged across every role a user holds) landing bde/team_lead on My Work and everyone
+else on Dashboard. The four standard states from `docs/06-ui-spec.md`
+(`src/ui/states/{LoadingSkeleton,EmptyState,ErrorState,DeniedState}.tsx`) are wired to real
+integration points rather than demoed in isolation: `loading.tsx`/`error.tsx` use Next's own
+loading-UI and error-boundary conventions, and `DeniedState` is the actual server-side gate when a
+role directly navigates to a route outside their nav — hiding a link is presentation only and
+never the sole control (CLAUDE.md #1). Verified against a real signed-in session (a temporary test
+tenant and two test users created via the Supabase Admin API, exercised through the real sign-in
+flow, then deleted): correct nav per role, correct default landing, and a `bde` identity denied
+`/admin` and `/team` by direct URL even though its own nav never links to them. No product tables,
+routes or features beyond auth/permissions/audit/shell exist yet — see `docs/07-build-backlog.md`
+for what M0.8 onward brings.
 
 ## Commands
 
