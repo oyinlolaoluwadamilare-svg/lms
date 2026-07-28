@@ -115,6 +115,9 @@ create table outcome_reasons (
 );
 
 -- ---------------------------------------------------------------- accounts / contacts
+-- D-03: an account is one record, but ownership is per practice line (several practice
+-- lines may sell into the same client) — see account_practice_owners below. There is
+-- deliberately no single owner_id column on accounts.
 create table accounts (
   id uuid primary key default uuid_generate_v4(),
   tenant_id uuid not null references tenants(id),
@@ -123,7 +126,6 @@ create table accounts (
   industry text, region text, size_band text,
   parent_account_id uuid references accounts(id),
   website text,
-  owner_id uuid references users(id),
   is_demo boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -131,6 +133,16 @@ create table accounts (
   deleted_at timestamptz
 );
 create unique index accounts_unique_name on accounts (tenant_id, normalised_name) where deleted_at is null;
+
+-- D-03: one owner per (account, practice line) relationship, not one global owner.
+create table account_practice_owners (
+  account_id uuid not null references accounts(id),
+  practice_line_id uuid not null references practice_lines(id),
+  owner_id uuid not null references users(id),
+  added_by uuid references users(id),
+  added_at timestamptz not null default now(),
+  primary key (account_id, practice_line_id)
+);
 create index accounts_trgm on accounts using gin (name gin_trgm_ops);   -- fuzzy dup warning
 
 create table contacts (

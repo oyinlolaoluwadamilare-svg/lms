@@ -12,7 +12,8 @@ Tenant
 ├── User ── UserRole ──────────┤ (role scoped to practice line)
 ├── PipelineStage (ordered, probability threshold, stable id)
 ├── CustomFieldDef ── CustomFieldValue
-├── Account ── Contact
+├── Account ──┬── AccountPracticeOwner (D-03: one owner per practice-line relationship)
+│             └── Contact
 │     └── Deal ──┬── DealContact (decision role, is_primary)
 │                ├── Activity ──┬── ActivityRevision
 │                │              └── ActivityContact
@@ -54,8 +55,16 @@ must have a non-null practice line.
 `lost` stage per tenant.
 
 ### accounts
-`id, tenant_id, name, normalised_name (generated, for duplicate matching), industry, region, size_band, parent_account_id, website, owner_id, is_demo`
+`id, tenant_id, name, normalised_name (generated, for duplicate matching), industry, region, size_band, parent_account_id, website, is_demo`
 **Invariant:** `(tenant_id, normalised_name)` unique among non-deleted rows; creation warns on fuzzy match.
+**D-03:** ownership is per practice line, not a single global owner — there is deliberately no
+`owner_id` column here; see `account_practice_owners`.
+
+### account_practice_owners
+`account_id, practice_line_id, owner_id, added_by, added_at`
+**Invariant:** one row per `(account_id, practice_line_id)` — exactly one owner per practice-line
+relationship on an account. A client sold to by two practice lines has two rows, potentially two
+different owners. Account 360 (M5.8) shows each practice-line relationship with its own owner.
 
 ### contacts
 `id, tenant_id, account_id, first_name, last_name, job_title, email, phone, linkedin_url, is_active, last_engaged_at (derived), is_demo`
@@ -110,7 +119,7 @@ API, bulk action, mark-won, mark-lost. There must be exactly one code path that 
 ## Planning and governance
 
 ### quotas
-`id, tenant_id, scope (user|team|practice|tenant), scope_ref_id, fiscal_period (e.g. 2026-Q3), target_minor, currency_code, set_by`
+`id, tenant_id, scope (user|team|practice|tenant), scope_ref_id, fiscal_period (e.g. 2026-01 — D-04: monthly granularity), target_minor, currency_code, set_by`
 
 ### forecast_snapshots
 `id, tenant_id, deal_id, snapshot_date, stage_id, forecast_category, weighted_value_minor, owner_id`

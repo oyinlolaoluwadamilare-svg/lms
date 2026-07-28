@@ -115,7 +115,10 @@ reassignment history is never overwritten.
 
 ---
 
-## M5 — Win/loss discipline and contacts 🔒 D-03
+## M5 — Win/loss discipline and contacts
+
+D-03 is answered (one account, per-practice-line owner via `account_practice_owners`) — no longer
+blocked.
 
 **M5.1** `outcome_reasons` admin configuration; `deal_outcomes` migration.
 **M5.2** `closeDeal` service: atomic outcome, stage event, status, open-task cancellation, audit.
@@ -126,20 +129,23 @@ Closing is impossible without a reason; loss requires detail; lost-to-competitor
 **M5.6** Contact management on the deal with decision-role badges; single-threading warning past
 Discovery.
 **M5.7** Activity attribution to contacts; contact-level last-engaged.
-**M5.8** Account 360 screen. 🔒 blocked by D-03 on ownership model.
+**M5.8** Account 360 screen, showing each practice-line relationship with its own owner (D-03).
 **M5.9** Handover panel: last ten engagements, open tasks and contacts, shown on owner change.
 
 **Exit:** nothing closes without a reason; deals carry stakeholder maps; relationships survive turnover.
 
 ---
 
-## M6 — Analytics rebuilt on events 🔒 D-04, D-05
+## M6 — Analytics rebuilt on events
+
+D-04 and D-05 are answered (monthly fiscal periods starting January, uniform per tenant;
+qualified opportunity = completeness threshold, tenant-configurable) — no longer blocked.
 
 **M6.1** Metric layer implementing `04-metric-definitions.md` exactly, with sample-size suppression
 and reconstructed-event exclusion.
 **M6.2** Cohort conversion funnel; remove any current-state approximation.
 **M6.3** Time in stage with median headline; bottleneck highlighting.
-**M6.4** Sales velocity. 🔒 blocked by D-05.
+**M6.4** Sales velocity, using the D-05 completeness-threshold definition of a qualified opportunity.
 **M6.5** Engagement analytics: coverage, volume by type paired with conversion, logging latency, time
 to first engagement, next-action coverage — all role-scoped.
 **M6.6** Task analytics: on-time rate excluding cancellations, overdue counts, delegation load.
@@ -151,12 +157,15 @@ to first engagement, next-action coverage — all role-scoped.
 
 ---
 
-## M7 — Email, calendar and automation 🔒 D-07
+## M7 — Email, calendar and automation
+
+D-07 is answered (metadata plus optional excerpt, body storage off by default) — no longer blocked.
 
 **M7.1** `email_connections` with encrypted server-side tokens; user-initiated OAuth for Zoho,
 Google and Outlook. ⚑ **No path permits connecting another user's mailbox.**
 **M7.2** Inbound and outbound mail matching to contacts, generating activities via `logActivity`.
-🔒 blocked by D-07 on body storage.
+Per D-07: store metadata plus an optional excerpt only, off by default, with per-thread exclusion
+and a tenant-level override.
 **M7.3** Per-thread privacy exclusion.
 **M7.4** Calendar sync creating meeting activities; internal-only meetings excluded.
 **M7.5** Send-from-deal with logging.
@@ -171,17 +180,25 @@ Google and Outlook. ⚑ **No path permits connecting another user's mailbox.**
 
 ---
 
-## M8 — Forecasting, quotas and governance 🔒 D-04, D-08, D-11
+## M8 — Forecasting, quotas and governance 🔒 D-08b
+
+D-04 (fiscal calendar) and D-11 (retention periods) are answered — no longer blocked. D-08's FX
+rate-source decision is made (a live external provider) but D-08b, the enabled currency list and
+default reporting currency per tenant, is still open and blocks M8.8.
 
 **M8.1** Forecast categories with override and reason; category totals alongside weighted.
-**M8.2** `quotas` for user, team, practice and tenant per period; attainment and pace. 🔒 D-04.
+**M8.2** `quotas` for user, team, practice and tenant per period; attainment and pace. Fiscal
+period is monthly, uniform per tenant (D-04).
 **M8.3** Weekly `forecast_snapshots` job; commit accuracy reporting.
 **M8.4** Slippage report derived from close-date audit history.
 **M8.5** In-app audit log viewer with filters and export. ⚑
 **M8.6** Duplicate detection with review queue; admin merge preserving all children, reversible 30
 days. ⚑
-**M8.7** Soft delete and recycle bin with restore. 🔒 D-11.
-**M8.8** Multi-currency with FX rates and reporting currency. 🔒 D-08.
+**M8.7** Soft delete and recycle bin with restore. Recycle bin 30 days, audit log retention 7
+years, backup retention 30 days (D-11).
+**M8.8** Multi-currency with FX rates and reporting currency. Rate source is a live external
+provider, not manual entry (D-08). 🔒 blocked on the enabled currency list and default reporting
+currency per tenant (D-08b).
 **M8.9** Custom fields builder with typed values and required-at-stage rules.
 
 **Exit:** the forecast is defensible; data quality is enforced; every change is inspectable in-app.
@@ -192,13 +209,15 @@ days. ⚑
 
 **M9.1** `leads` with capture, qualification, scoring and convert-to-deal preserving history.
 Unconverted leads excluded from pipeline value.
-**M9.2** Qualification framework with completeness gating. 🔒 D-05 (D-01 is answered: advisory only).
+**M9.2** Qualification framework with completeness gating, per D-05 (D-01 is answered: advisory only).
 **M9.3** Routing rules and response-time SLA.
 **M9.4** Source and campaign attribution through to revenue.
 **M9.5** Documents with versioning and deal linkage; templates; sequences with reply detection;
 proposal generation and e-signature integration.
 **M9.6** Public API and webhooks, honouring the same permission matrix. ⚑
-**M9.7** Slack or Teams notifications; ERP hand-off for closed-won. 🔒 D-09.
+**M9.7** Slack or Teams notifications; ERP hand-off for closed-won, delivered through the M9.6
+public API rather than a bespoke integration (D-09). 🔒 blocked on which specific finance/ERP
+system and payload contract to target (D-09b).
 **M9.8** Responsive PWA with offline read and a queued write path for activities and tasks.
 **M9.9** Risk score — **ship the explainable factor breakdown before the number**; calibrate against
 historical outcomes.

@@ -28,7 +28,7 @@ logged at warn level, because a spike is a security signal.
 ## Privacy and data protection
 
 Email body storage is off by default; metadata plus an optional excerpt only, with per-thread
-exclusion available to the user and a tenant-level override. Pending decision D-07.
+exclusion available to the user and a tenant-level override. Confirmed by decision D-07.
 
 No personal data in URLs, query strings, referrers or log lines. Note contents and email bodies are
 never logged.

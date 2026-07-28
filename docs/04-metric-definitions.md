@@ -43,8 +43,9 @@ Median, computed only over closed deals. Open deals are excluded, since includin
 systematically understates cycle length.
 
 **Sales velocity.** `(qualified_opportunities × average_deal_value × win_rate) ÷ average_cycle_length_days`,
-expressed as value per day. Qualified opportunity definition is pending decision **D-05** — do not
-implement until answered. Display the formula and the inputs in a tooltip, so the number is auditable.
+expressed as value per day. Per decision **D-05**, a qualified opportunity is one whose
+qualification completeness score is at or above the tenant-configured threshold. Display the
+formula and the inputs in a tooltip, so the number is auditable.
 
 **Stage regression rate.** Deals with at least one `is_regression = true` event in the period,
 over active deals. A leading loss indicator that most tools never surface.
