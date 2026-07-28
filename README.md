@@ -9,7 +9,7 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.5.
+   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.6.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -51,8 +51,21 @@ tenant isolation as an explicit matrix across every one of the five role identit
 the four existing tables — `director` and `team_lead` were entirely untested by M0.2's suite,
 which only exercised `tenant_admin`, `executive` and `bde`. Verified live, not just by inspection:
 disabling RLS on `tenants` made every identity's isolation test fail immediately; re-enabling it
-restored a clean pass. No product tables, routes or features beyond auth/permissions exist yet —
-see `docs/07-build-backlog.md` for what M0.6 onward brings.
+restored a clean pass.
+
+**M0.6** (audit service) is in place: `audit_entries` (migration `0004_audit_log`) is genuinely
+append-only — a `forbid_mutation()` trigger, not merely an RLS policy, blocks `update`/`delete` for
+every identity including the table-owning superuser (RLS alone would not stop that role, since
+RLS never restricts a table's owner or a `bypassrls` role, and `service_role` has one). Matching
+`db/schema.sql`'s own design, the table has no insert policy at all — only `src/services/audit.ts`'s
+`writeAudit()`, the single path, writes a row, using a service-role client
+(`src/lib/supabase/service.ts`) precisely because no RLS-permitted client-side write path exists
+for this table. `tests/rls/audit_log.spec.ts` proves no authenticated identity of any role can
+insert or mutate a row and that read access matches `admin.view_audit_log`; the append-only
+guarantee was also verified by hand against a live local Postgres (`update`/`delete` as the
+`postgres` superuser both raised) before being turned into a permanent test. No product tables,
+routes or features beyond auth/permissions/audit exist yet — see `docs/07-build-backlog.md` for
+what M0.7 onward brings.
 
 ## Commands
 

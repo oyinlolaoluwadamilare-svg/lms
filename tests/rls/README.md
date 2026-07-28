@@ -13,6 +13,21 @@ verified to actually fire, not just look correct: `alter table tenants disable r
 security` made every identity's isolation test fail immediately, and re-enabling it restored a
 clean pass.
 
+`audit_log.spec.ts` proves M0.6's exit criterion: no `authenticated` identity of any role can
+insert into or mutate `audit_entries` (it's written by the service_role only), read access matches
+`admin.view_audit_log` (tenant_admin/executive/director only, scoped to their own tenant), and -
+the case this milestone exists for - update and delete raise for every identity, including the
+migrator/superuser identity that owns the table and would otherwise bypass RLS entirely. That last
+guarantee is a trigger, not a policy, and was verified manually against a live local Postgres
+(`update`/`delete` as the `postgres` superuser both raised "append-only") before this file existed
+to make it a permanent, automated check.
+
+**Note on running the whole suite together:** every spec file's `seed()` truncates the same shared
+tables against one physical local Postgres. Vitest runs spec files in parallel by default, and
+concurrent `TRUNCATE ... CASCADE` across files can deadlock (this surfaced for real once a third
+RLS spec file existed) - `vitest.rls.config.ts` sets `fileParallelism: false` to serialize them.
+Don't remove that without re-verifying concurrent runs don't deadlock.
+
 **Rule that must hold from here on:** adding a tenant-scoped table without a corresponding RLS
 test file in this directory fails CI (see the `rls` job in `.github/workflows/ci.yml`).
 

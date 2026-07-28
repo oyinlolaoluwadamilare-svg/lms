@@ -30,6 +30,7 @@ to unwind further.
 | `0001_extensions_and_enums` | M0.2 | `uuid-ossp`, `citext`; the `user_status` and `app_role` enums |
 | `0002_tenancy` | M0.2 | `tenants`, `practice_lines`, `users`, `user_roles` |
 | `0003_rls_foundation` | M0.2 | `current_tenant_id`/`has_role`/`entitled_practices`/`can_write`; RLS on all four tables above |
+| `0004_audit_log` | M0.6 | `audit_entries`; RLS (read-only for tenant_admin/executive/director, no write policy at all - service_role only); `forbid_mutation()` trigger blocking update/delete for every identity including the table owner |
 
 Every later migration that adds a tenant-scoped table ships RLS in the same migration - a table
 without RLS does not ship (CLAUDE.md #2). `db/schema.sql` remains the full canonical reference this
