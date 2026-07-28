@@ -9,7 +9,7 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.3.
+   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.4.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -34,8 +34,18 @@ bypassed entirely.
 `middleware.ts` and `src/services/session.ts`, and suspended/inactive-user denial enforced by RLS
 itself rather than application logic (`getSessionUser` treats "no matching active `users` row" as
 denied and tears the session down). No self-service account creation — public signup is disabled
-at the Supabase project level, not just omitted from the UI. No product tables, routes or features
-beyond auth exist yet — see `docs/07-build-backlog.md` for what M0.4 onward brings.
+at the Supabase project level, not just omitted from the UI.
+
+**M0.4** (permission matrix) is in place: `docs/02-permission-matrix.md` as typed data in
+`src/auth/permissions.ts` (every action string in the document as a literal union — a missing one
+is a TypeScript compile error, not just a test failure) plus the `can(actor, action, resource)`
+guard, with `tests/permissions/matrix.spec.ts` proving every role-action pair is covered and named
+deny/allow cases from the document (bde can log an activity on an owned or co-owned deal but not
+any other's; bde can assign a task to a practice peer but not outside it; executive cannot write
+anything; no role can delete an activity, hard-delete, or connect another user's mailbox; a
+suspended or inactive user is denied everything; cross-tenant access is impossible for every role
+including tenant_admin). No product tables, routes or features beyond auth/permissions exist yet —
+see `docs/07-build-backlog.md` for what M0.5 onward brings.
 
 ## Commands
 
