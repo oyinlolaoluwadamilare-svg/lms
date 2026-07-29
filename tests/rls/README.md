@@ -22,6 +22,23 @@ guarantee is a trigger, not a policy, and was verified manually against a live l
 (`update`/`delete` as the `postgres` superuser both raised "append-only") before this file existed
 to make it a permanent, automated check.
 
+`deals_foundation.spec.ts` proves M1.1's exit criterion for the new tables it adds
+(`pipeline_stages`/`accounts`/`account_practice_owners`/`deals`/`deal_co_owners`): the
+`active_deal_requires_owner_and_date` constraint rejects an active deal missing either field but
+allows an `on_hold` one missing both; cross-tenant isolation; D-02's practice-wide-read/own-write
+shape on deals (a bde reads a practice-mate's deal but can't update it, the owning bde can,
+team_lead/director can update any deal in their practice); accounts' practice-scoped visibility via
+`account_practice_owners` (owned in a practice you're not entitled to, invisible; tenant_admin sees
+everything); and pipeline_stages' tenant-wide-read/tenant_admin-only-write shape. This is a
+baseline, not the exhaustive per-role-action matrix - that's M1.8's own later, separately-flagged
+(⚑) milestone, not duplicated here. Writing this file caught two real bugs on the first run, not
+by inspection: adding RLS to `deal_co_owners`/`account_practice_owners` (see migration
+`0005_pipeline_stages_accounts_deals`'s own notes) created a circular RLS dependency with
+`deals`/`accounts` ("infinite recursion detected in policy"), fixed with `security definer` helper
+functions; and a test's own cleanup step tried to `DELETE` as an `authenticated` client, which
+correctly has no delete grant on anything (CLAUDE.md #3) - fixed by cleaning up via the migrator
+instead, since that's not something a real user session should be able to do anyway.
+
 **Note on running the whole suite together:** every spec file's `seed()` truncates the same shared
 tables against one physical local Postgres. Vitest runs spec files in parallel by default, and
 concurrent `TRUNCATE ... CASCADE` across files can deadlock (this surfaced for real once a third

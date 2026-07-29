@@ -9,8 +9,8 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.8. **M0 is now complete**
-   per its own exit criteria; M1 (deals and pipeline) is next.
+   backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
+   through task M1.1.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -92,8 +92,32 @@ code that doesn't exist. See `db/seed/README.md` for the full accounting of what
 why. Verified against the real project, not just written and assumed: ran the seed script twice
 (confirming idempotent re-seeding), then signed in through the real app as the seeded director
 (correct nav, correct tenant name) and the seeded suspended user (correctly redirected to
-`/account-suspended`). No product tables, routes or features beyond
-auth/permissions/audit/shell/seed exist yet — see `docs/07-build-backlog.md` for what M1 brings.
+`/account-suspended`).
+
+This is where M0 ends: an authenticated user of each role sees a correct, empty shell; every
+permission pair is tested; cross-tenant isolation is proven.
+
+## M1 — Deals and pipeline
+
+**M1.1** (`pipeline_stages`/`accounts`/`deals`/`deal_co_owners` migrations) is in place — migration
+`0005_pipeline_stages_accounts_deals`, per `db/schema.sql`, with `active_deal_requires_owner_and_date`
+(an active deal cannot exist without both an owner and an expected close date) and
+`account_practice_owners` (D-03: one owner per account-practice-line relationship, not a single
+global owner). Two deliberate deviations from `db/schema.sql`, not silently reproduced: it never
+enables RLS on `pipeline_stages`/`accounts`/`account_practice_owners`/`deal_co_owners` at all
+(CLAUDE.md #2 requires it regardless, so all four get it here); and its own accounts/deals table
+definitions omit `updated_by` against its own stated general rule that every mutable table carries
+one. Adding RLS to `deal_co_owners`/`account_practice_owners` — which the reference schema had
+skipped — created a real, caught-by-actually-running-the-tests bug: a circular RLS dependency with
+`deals`/`accounts` ("infinite recursion detected in policy"), fixed with `security definer` helper
+functions mirroring the pattern `current_tenant_id()`/`has_role()` already established.
+`tests/rls/deals_foundation.spec.ts` proves the constraint, cross-tenant isolation, D-02's
+practice-wide-read/own-write shape on deals, and accounts' practice-scoped visibility through
+`account_practice_owners` — a baseline, not the exhaustive per-role-action matrix that M1.8 (⚑,
+its own later milestone) will build. Verified against a real local Postgres, forward and backward,
+and mirrored onto the real Supabase project (this container still has no raw-TCP egress for a
+direct connection). No repository, domain logic or UI for deals exists yet — see
+`docs/07-build-backlog.md` for M1.2 onward.
 
 ## Commands
 
