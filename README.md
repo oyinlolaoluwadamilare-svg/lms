@@ -9,7 +9,8 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.7.
+   backlog (M0–M9). Current milestone: **M0 — Foundation**, through task M0.8. **M0 is now complete**
+   per its own exit criteria; M1 (deals and pipeline) is next.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -77,9 +78,22 @@ role directly navigates to a route outside their nav — hiding a link is presen
 never the sole control (CLAUDE.md #1). Verified against a real signed-in session (a temporary test
 tenant and two test users created via the Supabase Admin API, exercised through the real sign-in
 flow, then deleted): correct nav per role, correct default landing, and a `bde` identity denied
-`/admin` and `/team` by direct URL even though its own nav never links to them. No product tables,
-routes or features beyond auth/permissions/audit/shell exist yet — see `docs/07-build-backlog.md`
-for what M0.8 onward brings.
+`/admin` and `/team` by direct URL even though its own nav never links to them.
+
+**M0.8** (seed script) is in place, deliberately scoped down from its full spec —
+`db/seed/seed.mjs` (`npm run db:seed`) deterministically creates two tenants and real Supabase
+Auth users covering every role, including a suspended one, so any of them can sign in for real
+rather than only existing as rows. The rest of M0.8's stated scope (`is_demo` on every row, a CI
+assertion that demo rows never appear in a metric query) is **not** built yet: `is_demo` only
+exists on `accounts`/`contacts`/`deals`/`leads`/`tasks` (`docs/01-domain-model.md`), none of which
+are migrated, and there is no metric query for demo rows to pollute until the analytics milestones
+(M7) — inventing either now would mean a schema column nothing calls for yet, or a test against
+code that doesn't exist. See `db/seed/README.md` for the full accounting of what's deferred and
+why. Verified against the real project, not just written and assumed: ran the seed script twice
+(confirming idempotent re-seeding), then signed in through the real app as the seeded director
+(correct nav, correct tenant name) and the seeded suspended user (correctly redirected to
+`/account-suspended`). No product tables, routes or features beyond
+auth/permissions/audit/shell/seed exist yet — see `docs/07-build-backlog.md` for what M1 brings.
 
 ## Commands
 

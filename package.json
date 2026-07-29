@@ -18,6 +18,7 @@
     "db:migrate": "node --env-file-if-exists=.env.local db/migrate.mjs up",
     "db:migrate:down": "node --env-file-if-exists=.env.local db/migrate.mjs down",
     "db:setup:local": "bash scripts/db-setup-local.sh",
+    "db:seed": "node --env-file-if-exists=.env.local db/seed/seed.mjs --yes-i-know-this-writes-to-the-configured-project",
     "ci": "npm run typecheck && npm run lint && npm run test && npm run test:e2e"
   },
   "dependencies": {
