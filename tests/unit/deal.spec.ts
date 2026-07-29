@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dealValue, formatDealReference, resolveProbability, weightedValue } from "../../src/domain/deal";
-import { parseMoneyMinor } from "../../src/domain/money";
+import { parseMoneyMinor, toMinorUnits } from "../../src/domain/money";
 
 const STAGE = { probabilityThreshold: 40 };
 
@@ -92,5 +92,28 @@ describe("parseMoneyMinor", () => {
 
   it("returns null for a null input rather than throwing", () => {
     expect(parseMoneyMinor(null)).toBeNull();
+  });
+});
+
+describe("toMinorUnits", () => {
+  it("converts a whole-number major amount", () => {
+    expect(toMinorUnits("1500000")).toBe(150_000_000n);
+  });
+
+  it("converts an amount with cents", () => {
+    expect(toMinorUnits("1500000.50")).toBe(150_000_050n);
+  });
+
+  it("pads a single decimal digit", () => {
+    expect(toMinorUnits("10.5")).toBe(1_050n);
+  });
+
+  it("rejects more decimal places than the currency supports", () => {
+    expect(() => toMinorUnits("10.123")).toThrow();
+  });
+
+  it("rejects a non-numeric amount", () => {
+    expect(() => toMinorUnits("abc")).toThrow();
+    expect(() => toMinorUnits("-5")).toThrow();
   });
 });

@@ -10,7 +10,7 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
-   through task M1.1.
+   through task M1.3.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -139,6 +139,37 @@ including the large-value precision case, against its own dedicated tenant, torn
 see `tests/integration/README.md` for the two repository secrets (`SUPABASE_URL`,
 `SUPABASE_SERVICE_ROLE_KEY`) the CI job needs before it will pass. No create/list/filter UI for
 deals exists yet — see `docs/07-build-backlog.md` for M1.3 onward.
+
+**M1.3** (create-deal flow) is in place: a Zod schema (`app/(app)/deals/new/schema.ts`) requiring
+`ownerId` and `expectedCloseDate`, a server action (`app/(app)/deals/new/actions.ts`), and the
+single-path service `createDeal` (`src/services/deals.ts`) — the "Unknown Author" state named in
+`docs/07-build-backlog.md` is unrepresentable structurally, not just by validation: `authorId` is
+never a parameter anywhere in `createDeal` or `insertDeal`'s input type, it is always `actor.id`.
+`can(actor, "deal.create", ...)` is checked in the service before any insert is attempted, as a
+second control independent of the `deals_insert` RLS policy from migration `0005` (CLAUDE.md #1);
+every successful create writes an audit row via the same `writeAudit` single path M0.6 built
+(CLAUDE.md #6). `page.tsx` originally imported four `src/data` repositories directly — a real
+layering violation the boundaries lint rule (M0.1) caught immediately — fixed by adding
+`getCreateDealFormOptions()` to `src/services/deals.ts` so `app` reaches `data` only through
+`services`, per `CLAUDE.md` §4's layering rule.
+
+`tests/integration/create-deal-service.spec.ts` exercises the entire real chain — a real Supabase
+Auth sign-in, the real RLS-scoped session client, the real `can()` check, the real insert, the real
+audit write — against the real hosted project, for both a bde creating a deal in their own practice
+and an executive denied before any insert is attempted. Building it surfaced a real, non-obvious
+architectural constraint, not just a test bug: once `createDeal` writes an `audit_entries` row, the
+referenced user and tenant become **permanently un-deletable** (`audit_entries.actor_id`/`tenant_id`
+are real foreign keys to `users`/`tenants`, and M0.6's `forbid_mutation()` trigger blocks deleting
+the audit row itself for every role, including `service_role` — by design). A delete-and-recreate
+teardown pattern silently failed against this the second time the suite ran (`error` on those
+specific deletes went unchecked); the fix makes the tenant and its users a permanent,
+find-or-create fixture instead, and only deletes `deals` and the rows with no `audit_entries`
+foreign key pointing at them between runs. See `tests/integration/README.md` for the full
+diagnosis, including a second, related bug it surfaced and repaired (`public.users.id` has no
+foreign key to `auth.users.id`, so a since-fixed version of this same teardown had already deleted
+one Auth identity while leaving its un-deletable `public.users` row behind). Verified by running the
+full suite three times in direct succession, not just once — the exact repro that first surfaced
+the bug.
 
 ## Commands
 

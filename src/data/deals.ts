@@ -73,3 +73,74 @@ export async function nextDealReference(supabase: SupabaseClient, tenantId: stri
   const count = await countDealsForTenant(supabase, tenantId);
   return formatDealReference(count + 1);
 }
+
+export interface NewDealInput {
+  tenantId: string;
+  reference: string;
+  name: string;
+  accountId: string;
+  practiceLineId: string;
+  stageId: string;
+  clientType: "new" | "existing";
+  ownerId: string;
+  authorId: string;
+  expectedCloseDate: string; // YYYY-MM-DD
+  proposalValueMinor: bigint | null;
+  currencyCode: string;
+  brief: string | null;
+}
+
+export interface InsertedDeal {
+  id: string;
+  reference: string;
+}
+
+const POSTGRES_UNIQUE_VIOLATION = "23505";
+
+// Thrown specifically on a (tenant_id, reference) collision (migration 0005) so the caller (the
+// create-deal service) can distinguish "the reference I picked was taken in the meantime - try the
+// next one" from every other insert failure, which should just fail loudly.
+export class DealReferenceConflictError extends Error {
+  constructor(reference: string) {
+    super(`reference "${reference}" already exists for this tenant`);
+    this.name = "DealReferenceConflictError";
+  }
+}
+
+// author_id and created_by are always input.authorId - there is no field here a caller could set
+// to author someone else's deal as them; the service (src/services/deals.ts) is the only place
+// that decides what authorId is, and it always uses the acting user's own id, never a value from
+// the request body. That is what makes "the Unknown Author state must be unrepresentable"
+// (docs/07-build-backlog.md M1.3) actually true, rather than merely validated.
+export async function insertDeal(supabase: SupabaseClient, input: NewDealInput): Promise<InsertedDeal> {
+  const { data, error } = await supabase
+    .from("deals")
+    .insert({
+      tenant_id: input.tenantId,
+      reference: input.reference,
+      name: input.name,
+      account_id: input.accountId,
+      practice_line_id: input.practiceLineId,
+      stage_id: input.stageId,
+      client_type: input.clientType,
+      owner_id: input.ownerId,
+      author_id: input.authorId,
+      created_by: input.authorId,
+      status: "active",
+      expected_close_date: input.expectedCloseDate,
+      proposal_value_minor: input.proposalValueMinor === null ? null : input.proposalValueMinor.toString(),
+      currency_code: input.currencyCode,
+      brief: input.brief,
+    })
+    .select("id, reference")
+    .single();
+
+  if (error) {
+    if ((error as { code?: string }).code === POSTGRES_UNIQUE_VIOLATION) {
+      throw new DealReferenceConflictError(input.reference);
+    }
+    throw new Error(`insertDeal failed: ${error.message}`);
+  }
+
+  return data as InsertedDeal;
+}

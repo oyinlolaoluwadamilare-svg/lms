@@ -18,3 +18,26 @@ export function parseMoneyMinor(textValue: string | null): bigint | null {
   if (textValue === null) return null;
   return BigInt(textValue);
 }
+
+// Converts a decimal major-unit amount as a human types it (e.g. "1500000.50") to minor units.
+// Assumes 2 decimal places - true for NGN/USD/GBP, the "reasonable starting list" named in
+// docs/DECISIONS.md D-08b, which is itself still an open question (which currencies a tenant may
+// use at all is not yet decided). A zero-decimal or three-decimal currency would need this
+// parameterised per currency, not assumed universal - not built now since no such currency is
+// enabled anywhere yet.
+export function toMinorUnits(majorAmount: string, decimalPlaces = 2): bigint {
+  const trimmed = majorAmount.trim();
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(trimmed);
+  if (!match) {
+    throw new Error(`invalid decimal amount: "${majorAmount}"`);
+  }
+  // match[1] is guaranteed present whenever match succeeds - the first capture group (\d+) is
+  // mandatory, unlike the optional fractional group.
+  const whole = match[1]!;
+  const fraction = match[2] ?? "";
+  if (fraction.length > decimalPlaces) {
+    throw new Error(`"${majorAmount}" has more than ${decimalPlaces} decimal places`);
+  }
+  const paddedFraction = fraction.padEnd(decimalPlaces, "0");
+  return BigInt(whole) * 10n ** BigInt(decimalPlaces) + BigInt(paddedFraction || "0");
+}
