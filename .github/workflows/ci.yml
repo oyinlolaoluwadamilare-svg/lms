@@ -21,8 +21,26 @@ jobs:
         run: npm run lint
       - name: Unit + permission + layering suites
         run: npm run test
-      # tests/integration joins this job once src/data repositories exist, from M1 onward
-      # (see tests/integration/README.md). RLS has its own job below, from M0.2 onward.
+
+  integration:
+    runs-on: ubuntu-latest
+    # src/data repositories are built on the Supabase JS client (PostgREST), not a raw Postgres
+    # connection, so - unlike the rls job below - a bare local Postgres service container can't
+    # stand in for it; this runs against the real hosted Supabase project (see
+    # tests/integration/README.md). Requires the SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY repo
+    # secrets to be configured - this job fails until they are.
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Repository integration suite
+        run: npm run test:integration
 
   rls:
     runs-on: ubuntu-latest

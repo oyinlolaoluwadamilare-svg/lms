@@ -116,8 +116,29 @@ practice-wide-read/own-write shape on deals, and accounts' practice-scoped visib
 `account_practice_owners` — a baseline, not the exhaustive per-role-action matrix that M1.8 (⚑,
 its own later milestone) will build. Verified against a real local Postgres, forward and backward,
 and mirrored onto the real Supabase project (this container still has no raw-TCP egress for a
-direct connection). No repository, domain logic or UI for deals exists yet — see
-`docs/07-build-backlog.md` for M1.2 onward.
+direct connection).
+
+**M1.2** (deal repository and domain logic) is in place: `src/domain/deal.ts` (`resolveProbability`,
+`dealValue`, `weightedValue`, `formatDealReference` — all pure, per `docs/01-domain-model.md`'s
+derived-values table and `docs/04-metric-definitions.md`'s exact formulas, never inventing one) and
+`src/data/deals.ts` (`getDealWithStage`, `countDealsForTenant`, `nextDealReference`). Money is
+`bigint` throughout (CLAUDE.md #9), and every money column is selected with an explicit `::text`
+cast — verified directly against this project's real REST endpoint that PostgREST serialises a
+bare `bigint` column as a JSON **number**, silently losing precision above
+`Number.MAX_SAFE_INTEGER` before any TypeScript code runs; casting to text forces a JSON string
+that parses exactly (`src/domain/money.ts`'s `parseMoneyMinor` is the one place that parse
+happens). `reference`'s exact format (a per-tenant sequential `D-0001` style) is an inferred
+default, not a confirmed decision — `docs/01-domain-model.md` names the field but no format is
+specified anywhere, and it isn't a listed open question in `docs/DECISIONS.md`.
+
+Repository code here is the first to run into a real architectural fork: `src/data` is built on
+the Supabase JS client (PostgREST), which this container can't stand up locally (no Docker daemon
+for `supabase start`), so integration tests for it run against the real hosted project rather than
+a local Postgres, unlike `tests/rls`. `tests/integration/deals-repository.spec.ts` proves this,
+including the large-value precision case, against its own dedicated tenant, torn down afterward —
+see `tests/integration/README.md` for the two repository secrets (`SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`) the CI job needs before it will pass. No create/list/filter UI for
+deals exists yet — see `docs/07-build-backlog.md` for M1.3 onward.
 
 ## Commands
 
