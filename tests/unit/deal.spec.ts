@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dealValue, formatDealReference, resolveProbability, weightedValue } from "../../src/domain/deal";
-import { parseMoneyMinor, toMinorUnits } from "../../src/domain/money";
+import { formatMoney, parseMoneyMinor, toMinorUnits } from "../../src/domain/money";
 
 const STAGE = { probabilityThreshold: 40 };
 
@@ -115,5 +115,29 @@ describe("toMinorUnits", () => {
   it("rejects a non-numeric amount", () => {
     expect(() => toMinorUnits("abc")).toThrow();
     expect(() => toMinorUnits("-5")).toThrow();
+  });
+});
+
+describe("formatMoney", () => {
+  it("formats a whole-number amount with two decimal places", () => {
+    expect(formatMoney({ amountMinor: 150_000_000n, currency: "NGN" })).toBe("NGN 1,500,000.00");
+  });
+
+  it("formats an amount with cents and thousands separators", () => {
+    expect(formatMoney({ amountMinor: 150_000_050n, currency: "NGN" })).toBe("NGN 1,500,000.50");
+  });
+
+  it("pads a fraction under two digits", () => {
+    expect(formatMoney({ amountMinor: 1_005n, currency: "NGN" })).toBe("NGN 10.05");
+  });
+
+  it("does not lose precision for a value beyond Number.MAX_SAFE_INTEGER", () => {
+    // The exact value that motivated the ::text cast requirement (src/domain/money.ts) - if this
+    // ever round-tripped through a JS number, the assertion below would fail.
+    expect(formatMoney({ amountMinor: 9_007_199_254_740_993n, currency: "NGN" })).toBe("NGN 90,071,992,547,409.93");
+  });
+
+  it("formats a zero amount", () => {
+    expect(formatMoney({ amountMinor: 0n, currency: "NGN" })).toBe("NGN 0.00");
   });
 });

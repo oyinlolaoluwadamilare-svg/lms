@@ -1,5 +1,12 @@
 import type { Money } from "@/domain/money";
 
+// The single source of truth for these unions - db/migrations/0005's enum types, mirrored here so
+// every caller (form schema, filters, table columns) shares one definition rather than each
+// re-declaring its own "new" | "existing" literal.
+export type ClientType = "new" | "existing";
+export type DealStatus = "active" | "won" | "lost" | "on_hold";
+export type ForecastCategory = "pipeline" | "best_case" | "commit" | "closed";
+
 export interface DealForCalculation {
   proposalValueMinor: bigint | null;
   negotiatedValueMinor: bigint | null;

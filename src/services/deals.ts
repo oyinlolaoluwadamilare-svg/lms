@@ -1,19 +1,31 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Actor } from "@/auth/permissions";
 import { listAccounts } from "@/data/accounts";
-import { DealReferenceConflictError, insertDeal, nextDealReference, type InsertedDeal } from "@/data/deals";
+import {
+  DealReferenceConflictError,
+  insertDeal,
+  listDeals,
+  nextDealReference,
+  type DealListFilters,
+  type DealListRow,
+  type InsertedDeal,
+} from "@/data/deals";
+// Re-exported so app/(app)/deals only needs to import from this module - app may not import
+// src/data directly (eslint.config.mjs boundaries), including for types.
+export type { DealListFilters, DealListRow };
 import { listPracticeLines } from "@/data/practiceLines";
-import { listOpenStages, type PipelineStageOption } from "@/data/pipelineStages";
+import { listAllStages, listOpenStages, type PipelineStageOption } from "@/data/pipelineStages";
 import { listActiveUsersInTenant } from "@/data/users";
 import { writeAudit } from "@/services/audit";
 import type { AppUser } from "@/domain/user";
+import type { ClientType } from "@/domain/deal";
 
 export interface CreateDealInput {
   name: string;
   accountId: string;
   practiceLineId: string;
   stageId: string;
-  clientType: "new" | "existing";
+  clientType: ClientType;
   ownerId: string;
   expectedCloseDate: string; // YYYY-MM-DD
   proposalValueMinor: bigint | null;
@@ -113,4 +125,35 @@ export async function getCreateDealFormOptions(supabase: SupabaseClient): Promis
   ]);
 
   return { accounts, practiceLines, stages, owners };
+}
+
+export interface PipelineFilterOptions {
+  accounts: Array<{ id: string; name: string }>;
+  practiceLines: Array<{ id: string; name: string }>;
+  stages: PipelineStageOption[];
+  owners: Array<Pick<AppUser, "id" | "fullName" | "email">>;
+}
+
+// Bundles the pipeline table's filter dropdown data - unlike getCreateDealFormOptions, stages here
+// cover every stage type (won/lost included), since the table must be able to show and filter by a
+// deal's actual current stage, not only the stages a deal could be created into.
+export async function getPipelineFilterOptions(supabase: SupabaseClient): Promise<PipelineFilterOptions> {
+  const [accounts, practiceLines, stages, owners] = await Promise.all([
+    listAccounts(supabase),
+    listPracticeLines(supabase),
+    listAllStages(supabase),
+    listActiveUsersInTenant(supabase),
+  ]);
+
+  return { accounts, practiceLines, stages, owners };
+}
+
+// Passthrough so app/(app)/deals/page.tsx doesn't import src/data directly (app may only reach
+// data through services). No extra business logic belongs here: RLS's deals_select policy already
+// is the authorisation boundary for reads (CLAUDE.md #1's "server-side authorisation always" is
+// satisfied by the database itself for this action, the same way every other list/detail read in
+// this app is - there is no separate can() check for deal.view the way deal.create has one, since
+// unlike a write there is no "resource that doesn't exist yet" to check against).
+export async function listPipelineDeals(supabase: SupabaseClient, filters: DealListFilters): Promise<DealListRow[]> {
+  return listDeals(supabase, filters);
 }

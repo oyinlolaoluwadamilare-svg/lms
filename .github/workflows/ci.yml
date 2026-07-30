@@ -74,6 +74,18 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
+    # A pre-existing gap this job never had wired up, surfaced rather than quietly worked around:
+    # tests/e2e/auth.spec.ts's reset-password test already round-trips a real call to Supabase
+    # Auth, and tests/e2e/pipeline.spec.ts (M1.4) signs in as a real seeded user - both need the
+    # same live project this job never had credentials for, plus a real browser-side anon key
+    # (the integration job only ever uses the service-role client, so it never needed one). Three
+    # repo secrets required: the two the `integration` job above already needs
+    # (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY) plus SUPABASE_ANON_KEY, new here - this job fails
+    # until all three are configured.
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -82,5 +94,7 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - name: Seed demo tenants (tests/e2e/pipeline.spec.ts signs in as a seeded user)
+        run: npm run db:seed
       - name: Playwright e2e
         run: npm run test:e2e

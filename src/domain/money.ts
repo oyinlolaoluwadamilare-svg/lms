@@ -41,3 +41,17 @@ export function toMinorUnits(majorAmount: string, decimalPlaces = 2): bigint {
   const paddedFraction = fraction.padEnd(decimalPlaces, "0");
   return BigInt(whole) * 10n ** BigInt(decimalPlaces) + BigInt(paddedFraction || "0");
 }
+
+// For display only (the pipeline table, deal detail). Deliberately does not go through
+// Number/Intl currency formatting - Intl's currency formatter takes a JS number, which would
+// round-trip amountMinor through float and reintroduce exactly the precision loss CLAUDE.md #9
+// forbids. BigInt.prototype.toLocaleString formats an arbitrarily large integer with grouping
+// separators without ever converting it to a float, so the whole-units part is exact; the minor
+// units are split off first via bigint division/modulo, never floating-point division.
+export function formatMoney(money: Money, decimalPlaces = 2): string {
+  const divisor = 10n ** BigInt(decimalPlaces);
+  const whole = money.amountMinor / divisor;
+  const fraction = money.amountMinor % divisor;
+  const fractionStr = fraction.toString().padStart(decimalPlaces, "0");
+  return `${money.currency} ${whole.toLocaleString("en-US")}.${fractionStr}`;
+}

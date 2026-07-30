@@ -10,7 +10,7 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
-   through task M1.3.
+   through task M1.4.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -170,6 +170,44 @@ foreign key to `auth.users.id`, so a since-fixed version of this same teardown h
 one Auth identity while leaving its un-deletable `public.users` row behind). Verified by running the
 full suite three times in direct succession, not just once — the exact repro that first surfaced
 the bug.
+
+**M1.4** (pipeline table view with filters) is in place: `src/data/deals.ts`'s `listDeals` joins
+deals to their stage, account, practice line and owner (a real, verified case of PostgREST's
+ambiguous-embed error — `deals` has five foreign keys into `users`, so `owner:users!owner_id(...)`
+disambiguation is required, confirmed directly against the real REST endpoint) and filters by
+stage, owner, practice line, account, client type, forecast category, status and an expected-close
+date range — all pushed down to Postgres, all narrowing within whatever migration `0005`'s
+`deals_select` RLS policy already allows a given role to see, never widening it. Money for display
+uses a new `formatMoney` (`src/domain/money.ts`) that never converts `amountMinor` through a JS
+`Number` — `BigInt.prototype.toLocaleString` formats an arbitrarily large integer exactly, unlike
+`Intl.NumberFormat`'s currency formatting, which takes a `Number` and would silently reintroduce
+the precision loss CLAUDE.md #9 forbids.
+
+`docs/06-ui-spec.md`'s Pipeline screen names an "advanced filter set" that also includes "days
+since last engagement", "has no next step" and "stage regression" — each depends on an entity or
+milestone that doesn't exist yet (an activity/task log for the first two, M2's `stage_events` table
+and its regression-derived column for the third; `docs/07-build-backlog.md` schedules all of that
+for M2 onward). Building filters against columns that are null for every row today, or a column
+that doesn't exist at all, would look like a real feature while silently doing nothing — deferred
+and documented here rather than faked, per CLAUDE.md's "do not start a milestone whose predecessor
+is incomplete" and "say when something is a bad idea," the same reasoning M0.8 already established
+for a comparable scope cut.
+
+Verified against the real hosted project, not just written and assumed:
+`tests/integration/pipeline-list.spec.ts` signs in as two bdes in different practice lines and an
+executive, proving RLS scoping is real (each bde sees only their own practice's deal; the executive
+sees both) and that every filter narrows correctly; run three times in direct succession with no
+manual cleanup, since this fixture never calls `createDeal` and so never hits the permanent-fixture
+constraint M1.3 found. `tests/e2e/pipeline.spec.ts` drives the actual running app in a real browser
+against a real seeded account (`db/seed/seed.mjs`), confirming the page itself renders correctly
+end to end — including the case its own seed data leaves untested elsewhere, zero `pipeline_stages`
+and zero `accounts` rows (M0.8 predates M1.1), which exercises the empty-filter-options and
+zero-deals paths for real. Building that test surfaced a pre-existing gap in CI, not something this
+task introduced: the `e2e` job never had Supabase credentials wired up at all, even though
+`auth.spec.ts`'s reset-password test already needed them — fixed by adding the same secrets pattern
+the `integration` job already uses, plus a new `SUPABASE_ANON_KEY` secret e2e needs that integration
+never did (browser sign-in uses the anon key; the integration job only ever uses the service-role
+client). See `tests/e2e/README.md`.
 
 ## Commands
 
