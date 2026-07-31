@@ -220,6 +220,30 @@ describe("deals: D-02 practice-wide read, own write", () => {
   });
 });
 
+describe("migration 0006: updated_at/updated_by trigger", () => {
+  it("a real update as a real user advances updated_at and stamps updated_by from auth.uid(), not the caller", async () => {
+    const before = await migrator.query("select updated_at from deals where id = $1", [ids.dealOwnedByBde1]);
+
+    const client = await asUser(ids.bdeA1);
+    // Deliberately tries to claim someone else did this - proves the trigger's auth.uid() wins
+    // over anything a caller's UPDATE statement supplies, the same protection author_id already
+    // has against a caller naming a different author (migration 0005).
+    await client.query("update deals set brief = 'trigger test', updated_by = $1 where id = $2", [ids.bdeA2, ids.dealOwnedByBde1]);
+    await client.end();
+
+    const after = await migrator.query("select updated_at, updated_by from deals where id = $1", [ids.dealOwnedByBde1]);
+    expect(new Date(after.rows[0].updated_at).getTime()).toBeGreaterThan(new Date(before.rows[0].updated_at).getTime());
+    expect(after.rows[0].updated_by).toBe(ids.bdeA1);
+    expect(after.rows[0].updated_by).not.toBe(ids.bdeA2);
+  });
+
+  it("a service-role-style write (no auth.uid() context) sets updated_by to null, not a stale value", async () => {
+    await migrator.query("update deals set brief = 'migrator update' where id = $1", [ids.dealOwnedByBde1]);
+    const { rows } = await migrator.query("select updated_by from deals where id = $1", [ids.dealOwnedByBde1]);
+    expect(rows[0].updated_by).toBeNull();
+  });
+});
+
 describe("deal_co_owners: mirrors deal.add_co_owner's scope", () => {
   it("the owning bde can add a co-owner to their own deal", async () => {
     const client = await asUser(ids.bdeA1);

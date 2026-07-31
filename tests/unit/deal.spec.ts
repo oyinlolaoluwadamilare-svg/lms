@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dealValue, formatDealReference, resolveProbability, weightedValue } from "../../src/domain/deal";
+import { dealValue, formatDealReference, isOpenStage, resolveProbability, weightedValue } from "../../src/domain/deal";
 import { formatMoney, parseMoneyMinor, toMinorUnits } from "../../src/domain/money";
 
 const STAGE = { probabilityThreshold: 40 };
@@ -139,5 +139,16 @@ describe("formatMoney", () => {
 
   it("formats a zero amount", () => {
     expect(formatMoney({ amountMinor: 0n, currency: "NGN" })).toBe("NGN 0.00");
+  });
+});
+
+describe("isOpenStage", () => {
+  it("is true only for an open stage", () => {
+    expect(isOpenStage("open")).toBe(true);
+  });
+
+  it("is false for won and lost - changeStage must refuse these, closeDeal (M5.2) owns them", () => {
+    expect(isOpenStage("won")).toBe(false);
+    expect(isOpenStage("lost")).toBe(false);
   });
 });

@@ -12,15 +12,18 @@ export function PipelineFilters({
   stages,
   owners,
   values,
+  view,
 }: {
   accounts: Option[];
   practiceLines: Option[];
   stages: Option[];
   owners: Option[];
   values: Record<string, string | undefined>;
+  view?: string;
 }) {
   return (
     <form method="get" className="flex flex-wrap items-end gap-3 rounded-token border border-line bg-raised p-4">
+      {view ? <input type="hidden" name="view" value={view} /> : null}
       <Select name="stage" label="Stage" value={values.stage} options={stages} />
       <Select name="owner" label="Owner" value={values.owner} options={owners} />
       <Select name="practiceLine" label="Practice line" value={values.practiceLine} options={practiceLines} />

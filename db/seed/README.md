@@ -22,8 +22,19 @@ npm run db:seed
 
 Requires `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`, and refuses to
 run without an explicit confirmation flag (already wired into the npm script) - **never point this
-at a real production project.** It's fully idempotent: re-running it deletes and recreates every
-row and auth user matching the fixed slugs/emails above, rather than accumulating duplicates.
+at a real production project.** It's idempotent: re-running it deletes and recreates every row and
+auth user matching the fixed slugs/emails above, rather than accumulating duplicates - with one
+exception, found the hard way during M1.5's manual QA: once a real audit-writing action
+(`createDeal`, `changeStage`, ...) has been performed against a seeded user or tenant, that user and
+tenant become permanently un-deletable (`audit_entries.actor_id`/`tenant_id` are real foreign keys,
+and M0.6's `forbid_mutation()` trigger blocks deleting an audit row for every role including
+`service_role`, by design). `ensureTenant`/`ensureUserWithRole` in `seed.mjs` detect this and reuse
+the existing tenant/user instead of failing the whole script - everything else under that tenant
+(`practice_lines`, `user_roles`, and, once they exist, `accounts`/`pipeline_stages`/`deals`) is still
+cleared and recreated fresh every run. Practical implication: **don't casually exercise an
+audit-writing feature against the seeded demo accounts** (use a disposable tenant instead, the way
+`tests/integration` does) unless you're fine with that tenant becoming a permanent fixture from then
+on - it's recoverable (this script repairs it automatically), just no longer fully disposable.
 
 ## What's deliberately not here yet
 

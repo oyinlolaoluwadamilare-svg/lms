@@ -6,6 +6,7 @@ import type { Money } from "@/domain/money";
 export type ClientType = "new" | "existing";
 export type DealStatus = "active" | "won" | "lost" | "on_hold";
 export type ForecastCategory = "pipeline" | "best_case" | "commit" | "closed";
+export type StageType = "open" | "won" | "lost";
 
 export interface DealForCalculation {
   proposalValueMinor: bigint | null;
@@ -60,4 +61,16 @@ export function formatDealReference(sequenceNumber: number): string {
     throw new Error(`sequenceNumber must be a positive integer, got ${sequenceNumber}`);
   }
   return `D-${String(sequenceNumber).padStart(4, "0")}`;
+}
+
+// docs/03-architecture.md names `changeStage` as "the only way a deal's stage changes," but that
+// same document makes `closeDeal` (docs/07-build-backlog.md M5.2, not built yet) the only path
+// that may move a deal into a won/lost stage - it "writes the outcome row, the stage event, the
+// deal status... atomically. Cannot succeed without an outcome reason." A plain changeStage cannot
+// honour that (there is no outcome-reason mechanism until M5.1's outcome_reasons/deal_outcomes
+// land), so it must refuse this transition rather than silently leave a deal sitting in a won/lost
+// stage with no outcome, no status change and no closed date - a worse, harder-to-detect defect
+// than a rejected drag.
+export function isOpenStage(stageType: StageType): boolean {
+  return stageType === "open";
 }

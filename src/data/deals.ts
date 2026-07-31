@@ -9,6 +9,7 @@ import {
   type DealStatus,
   type ForecastCategory,
   type StageForCalculation,
+  type StageType,
 } from "@/domain/deal";
 
 interface DealWithStageRow {
@@ -182,7 +183,7 @@ export interface DealListRow {
   name: string;
   accountName: string;
   practiceLineName: string;
-  stage: { id: string; name: string; sortOrder: number };
+  stage: { id: string; name: string; sortOrder: number; stageType: StageType };
   ownerName: string | null;
   clientType: ClientType;
   status: DealStatus;
@@ -206,7 +207,7 @@ interface DealListRowRaw {
   probability_override: number | null;
   accounts: { name: string } | null;
   practice_lines: { name: string } | null;
-  pipeline_stages: { id: string; name: string; sort_order: number; probability_threshold: number } | null;
+  pipeline_stages: { id: string; name: string; sort_order: number; probability_threshold: number; stage_type: StageType } | null;
   owner: { full_name: string } | null;
 }
 
@@ -220,7 +221,7 @@ export async function listDeals(supabase: SupabaseClient, filters: DealListFilte
       "id, reference, name, client_type, status, forecast_category, expected_close_date, " +
         "proposal_value_minor::text, negotiated_value_minor::text, currency_code, probability_override, " +
         "accounts(name), practice_lines(name), " +
-        "pipeline_stages(id, name, sort_order, probability_threshold), " +
+        "pipeline_stages(id, name, sort_order, probability_threshold, stage_type), " +
         "owner:users!owner_id(full_name)",
     )
     .is("deleted_at", null);
@@ -263,7 +264,12 @@ export async function listDeals(supabase: SupabaseClient, filters: DealListFilte
       name: row.name,
       accountName: row.accounts.name,
       practiceLineName: row.practice_lines.name,
-      stage: { id: row.pipeline_stages.id, name: row.pipeline_stages.name, sortOrder: row.pipeline_stages.sort_order },
+      stage: {
+        id: row.pipeline_stages.id,
+        name: row.pipeline_stages.name,
+        sortOrder: row.pipeline_stages.sort_order,
+        stageType: row.pipeline_stages.stage_type,
+      },
       ownerName: row.owner?.full_name ?? null,
       clientType: row.client_type,
       status: row.status,
@@ -273,4 +279,52 @@ export async function listDeals(supabase: SupabaseClient, filters: DealListFilte
       weightedValue: weightedValue(dealForCalc, stageForCalc),
     };
   });
+}
+
+export interface DealForStageChange {
+  id: string;
+  tenantId: string;
+  practiceLineId: string;
+  stageId: string;
+  ownerId: string | null;
+  authorId: string;
+}
+
+// For changeStage's authorisation check (src/services/deals.ts) - just enough of the deal to build
+// the can() Resource (practiceLineId/ownerId/authorId) and to compare the current stage against the
+// requested one. Deliberately not reusing getDealWithStage: that function's shape is about money
+// calculation, not authorisation, and mixing the two would make it unclear which fields a future
+// caller can rely on.
+export async function getDealForStageChange(supabase: SupabaseClient, dealId: string): Promise<DealForStageChange | null> {
+  const { data, error } = await supabase
+    .from("deals")
+    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id")
+    .eq("id", dealId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) throw new Error(`getDealForStageChange failed: ${error.message}`);
+  if (!data) return null;
+
+  const row = data as { id: string; tenant_id: string; practice_line_id: string; stage_id: string; owner_id: string | null; author_id: string };
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    practiceLineId: row.practice_line_id,
+    stageId: row.stage_id,
+    ownerId: row.owner_id,
+    authorId: row.author_id,
+  };
+}
+
+// The only place deals.stage_id is written from application code - called exclusively by
+// src/services/deals.ts's changeStage (docs/03-architecture.md's single-path rule). Does not touch
+// status/actual_close_date: those belong to the not-yet-built closeDeal (M5.2), which is also why
+// changeStage itself refuses a won/lost target stage before this is ever called - see
+// isOpenStage's comment in src/domain/deal.ts. updated_at/updated_by are not set here - migration
+// 0006's trigger sets both from auth.uid(), so a caller can't spoof who made the change.
+export async function updateDealStage(supabase: SupabaseClient, dealId: string, toStageId: string): Promise<void> {
+  const { error } = await supabase.from("deals").update({ stage_id: toStageId }).eq("id", dealId);
+
+  if (error) throw new Error(`updateDealStage failed: ${error.message}`);
 }

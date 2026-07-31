@@ -10,7 +10,7 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
-   through task M1.4.
+   through task M1.5.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -208,6 +208,54 @@ task introduced: the `e2e` job never had Supabase credentials wired up at all, e
 the `integration` job already uses, plus a new `SUPABASE_ANON_KEY` secret e2e needs that integration
 never did (browser sign-in uses the anon key; the integration job only ever uses the service-role
 client). See `tests/e2e/README.md`.
+
+**M1.5** (pipeline board view with drag) is in place: `src/services/deals.ts`'s `changeStage` is
+the single path a deal's stage ever changes through (docs/03-architecture.md), called today only by
+the board's drag handler (`app/(app)/deals/actions.ts`'s `changeStageAction`, a server action a
+client component calls directly). `authorId`-style pinning applies here too: the target stage must
+be an `open`-type stage, checked and refused server-side (`code: "target_is_closing_stage"`), not
+merely hidden as a drop target in the UI (CLAUDE.md #1) — moving a deal into a won/lost stage is
+`closeDeal`'s exclusive job (docs/07-build-backlog.md M5.2, not built yet, and the only path that
+will ever collect the outcome reason that transition requires). `can()` is checked independently of
+migration 0005's `deals_update` RLS policy, and every successful move writes an audit row via the
+existing `writeAudit` single path.
+
+Two real, non-obvious bugs surfaced by testing against the real project rather than assuming
+correctness:
+
+- `getDealForStageChange` reads through the *caller's own* RLS-scoped session, so a bde outside the
+  deal's practice can't see the row at all — `changeStage` correctly reports `not_found`, not
+  `denied`, for that case (the same not-confirming-existence-to-an-unauthorised-caller shape a
+  404-instead-of-403 API response uses). Confirmed both cases are handled correctly by testing a
+  *third* user, a same-practice non-owner bde, who genuinely gets `denied` after the read succeeds.
+- Neither `deals` nor `accounts` ever had anything maintaining `updated_at`/`updated_by` -
+  `changeStage`'s update was the first application write path against either table, which made this
+  visible. Fixed with migration `0006_updated_at_trigger`, setting both from `auth.uid()` rather
+  than trusting a caller-supplied value (mirroring how `author_id` is protected). Verified locally,
+  forward and backward, against a real per-user Postgres session
+  (`tests/rls/deals_foundation.spec.ts`) — **not yet mirrored onto the real hosted project**, since
+  this container has neither raw-TCP Postgres egress nor a Management API token in this session;
+  flagged in `db/migrations/README.md` as an outstanding manual step, the same way the CI secrets
+  gaps were flagged in M1.2/M1.4.
+
+Manually verifying the board in a real browser against real seeded data surfaced a third, more
+far-reaching finding: exercising `changeStage` against a seeded demo user (`bde-1@acme-demo.test`)
+during that QA pass permanently pinned the `acme-demo` tenant the same way M1.3 found for
+integration-test tenants — `db/seed/seed.mjs` had never been updated for this (it predates any
+audit-writing feature) and its delete calls were failing silently, breaking `npm run db:seed`
+outright on the next run. Fixed properly rather than avoided: `seed.mjs`'s `ensureTenant`/
+`ensureUserWithRole` now detect an undeletable tenant/user and reuse it instead of failing, and the
+script was extended to also clean up the M1.1 tables (`accounts`, `pipeline_stages`, `deals`,
+`account_practice_owners`) it had never touched. Verified by re-running `db:seed` twice against the
+real project in this now-permanently-pinned state and confirming a real sign-in still works
+afterward — see `db/seed/README.md` for the full account and the practical implication for anyone
+doing manual QA against seeded data.
+
+Verified end to end, not just at the service layer: `tests/integration/pipeline-list.spec.ts` signs
+in as real users to prove RLS scoping and the `denied`/`not_found` distinction above, and a manual
+pass drove the actual running app in a real browser with a real HTML5 drag gesture (mouse
+down/move/up, not a synthetic event), confirmed by screenshot and by querying the real database
+directly afterward that the dragged card's `stage_id` had genuinely changed.
 
 ## Commands
 

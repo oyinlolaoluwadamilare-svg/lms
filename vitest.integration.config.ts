@@ -12,6 +12,11 @@ export default defineConfig({
     environment: "node",
     include: ["tests/integration/**/*.spec.ts"],
     testTimeout: 30_000,
+    // beforeAll fixtures do many sequential real network round trips (tenant/practice/stage/
+    // account/user/role inserts, several via the Auth admin API) against the live hosted project -
+    // pipeline-list.spec.ts's fixture in particular (M1.5 added a fourth user) routinely exceeds
+    // Vitest's 10s hook default under real network latency, not because anything hangs.
+    hookTimeout: 60_000,
     fileParallelism: false,
   },
   resolve: {

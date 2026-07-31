@@ -1,17 +1,23 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
-import { listPipelineDeals } from "@/services/deals";
+import { getSessionActor } from "@/services/actor";
+import { changeStage, listPipelineDeals } from "@/services/deals";
+import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
-// M1.4 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced filter
-// set." This proves src/data/deals.ts's listDeals (via src/services/deals.ts's listPipelineDeals)
+// M1.4/M1.5 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced
+// filter set" and "Pipeline board view with drag, routed through the single changeStage service
+// path." This proves both src/data/deals.ts's listDeals (via listPipelineDeals) and changeStage
 // against the real hosted project: the money-precision-safe join (pipeline_stages/accounts/
 // practice_lines/owner), every filter actually narrows results, and - the part a service-role-only
-// test cannot prove - that migration 0005's deals_select RLS policy really does scope a signed-in
-// bde to their own practice line while an executive sees the whole tenant. No deal here is created
-// via createDeal (a plain service-role insert instead), so no audit_entries row ever references
-// this fixture's tenant/users - unlike tests/integration/create-deal-service.spec.ts, this tenant
-// is fully torn down every run (see that file's README note on why that one can't be).
+// test cannot prove - that migration 0005's deals_select/deals_update RLS policies really do scope
+// a signed-in bde to their own practice line while an executive can act tenant-wide.
+//
+// changeStage calls writeAudit on every successful move, same as createDeal (M1.3) - so once the
+// stage-change tests run, this tenant's users become permanently un-deletable (see
+// tests/integration/support/permanentFixture.ts). This fixture is find-or-create/permanent for
+// tenant + users accordingly, and delete-and-recreate for everything underneath that has no
+// audit_entries FK pointing at it.
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -24,11 +30,13 @@ const ids = {
   advisoryPracticeLineId: "",
   searchPracticeLineId: "",
   discoveryStageId: "",
+  proposalStageId: "",
   wonStageId: "",
   lostStageId: "",
   advisoryAccountId: "",
   searchAccountId: "",
   bdeAdvisoryAuthId: "",
+  bdeAdvisory2AuthId: "",
   bdeSearchAuthId: "",
   executiveAuthId: "",
   advisoryDealId: "",
@@ -42,37 +50,21 @@ async function cleanup() {
   await service.from("accounts").delete().eq("tenant_id", ids.tenantId);
   await service.from("pipeline_stages").delete().eq("tenant_id", ids.tenantId);
   await service.from("user_roles").delete().eq("tenant_id", ids.tenantId);
-  await service.from("users").delete().eq("tenant_id", ids.tenantId);
   await service.from("practice_lines").delete().eq("tenant_id", ids.tenantId);
-  await service.from("tenants").delete().eq("id", ids.tenantId);
-  if (ids.bdeAdvisoryAuthId) await service.auth.admin.deleteUser(ids.bdeAdvisoryAuthId);
-  if (ids.bdeSearchAuthId) await service.auth.admin.deleteUser(ids.bdeSearchAuthId);
-  if (ids.executiveAuthId) await service.auth.admin.deleteUser(ids.executiveAuthId);
+  // Deliberately not deleting users, tenants, or the auth users: once changeStage's "successful
+  // move" test writes an audit_entries row, they are permanently un-deletable - see
+  // tests/integration/support/permanentFixture.ts. Attempting it here would just be a silent
+  // no-op every time.
 }
 
-async function createAuthUser(email: string) {
-  const { data, error } = await service.auth.admin.createUser({ email, password: PASSWORD, email_confirm: true });
-  if (error) throw new Error(`create auth user ${email} failed: ${error.message}`);
-  return data.user!.id;
-}
-
-async function signIn(email: string): Promise<SupabaseClient> {
-  const client = createClient(SUPABASE_URL, ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { error } = await client.auth.signInWithPassword({ email, password: PASSWORD });
-  if (error) throw new Error(`sign in as ${email} failed: ${error.message}`);
-  return client;
+function signIn(email: string): Promise<SupabaseClient> {
+  return signInAs(SUPABASE_URL, ANON_KEY, email, PASSWORD);
 }
 
 beforeAll(async () => {
   service = createServiceClient();
 
-  const { data: tenant, error: tenantError } = await service
-    .from("tenants")
-    .insert({ name: "M1.4 Integration Test Tenant", slug: "m1-4-integration-test" })
-    .select("id")
-    .single();
-  if (tenantError) throw new Error(`seed tenant failed: ${tenantError.message}`);
-  ids.tenantId = tenant.id;
+  ids.tenantId = await findOrCreateTenant(service, "m1-4-integration-test", "M1.4 Integration Test Tenant");
 
   const { data: practiceLines, error: practiceLinesError } = await service
     .from("practice_lines")
@@ -89,12 +81,14 @@ beforeAll(async () => {
     .from("pipeline_stages")
     .insert([
       { tenant_id: ids.tenantId, name: "Discovery", code: "DISCOVERY", sort_order: 1, probability_threshold: 20, stage_type: "open" },
-      { tenant_id: ids.tenantId, name: "Closed Won", code: "WON", sort_order: 2, probability_threshold: 100, stage_type: "won" },
-      { tenant_id: ids.tenantId, name: "Closed Lost", code: "LOST", sort_order: 3, probability_threshold: 0, stage_type: "lost" },
+      { tenant_id: ids.tenantId, name: "Proposal", code: "PROPOSAL", sort_order: 2, probability_threshold: 50, stage_type: "open" },
+      { tenant_id: ids.tenantId, name: "Closed Won", code: "WON", sort_order: 3, probability_threshold: 100, stage_type: "won" },
+      { tenant_id: ids.tenantId, name: "Closed Lost", code: "LOST", sort_order: 4, probability_threshold: 0, stage_type: "lost" },
     ])
     .select("id, code");
   if (stagesError) throw new Error(`seed stages failed: ${stagesError.message}`);
   ids.discoveryStageId = stages!.find((s) => s.code === "DISCOVERY")!.id;
+  ids.proposalStageId = stages!.find((s) => s.code === "PROPOSAL")!.id;
   ids.wonStageId = stages!.find((s) => s.code === "WON")!.id;
   ids.lostStageId = stages!.find((s) => s.code === "LOST")!.id;
 
@@ -109,19 +103,14 @@ beforeAll(async () => {
   ids.advisoryAccountId = accounts!.find((a) => a.name === "Advisory Client")!.id;
   ids.searchAccountId = accounts!.find((a) => a.name === "Search Client")!.id;
 
-  ids.bdeAdvisoryAuthId = await createAuthUser("m1-4-bde-advisory@example.com");
-  ids.bdeSearchAuthId = await createAuthUser("m1-4-bde-search@example.com");
-  ids.executiveAuthId = await createAuthUser("m1-4-executive@example.com");
-
-  const { error: usersError } = await service.from("users").insert([
-    { id: ids.bdeAdvisoryAuthId, tenant_id: ids.tenantId, full_name: "Bde Advisory", email: "m1-4-bde-advisory@example.com", status: "active" },
-    { id: ids.bdeSearchAuthId, tenant_id: ids.tenantId, full_name: "Bde Search", email: "m1-4-bde-search@example.com", status: "active" },
-    { id: ids.executiveAuthId, tenant_id: ids.tenantId, full_name: "Test Executive", email: "m1-4-executive@example.com", status: "active" },
-  ]);
-  if (usersError) throw new Error(`seed users failed: ${usersError.message}`);
+  ids.bdeAdvisoryAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory@example.com", "Bde Advisory", PASSWORD);
+  ids.bdeAdvisory2AuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory-2@example.com", "Bde Advisory Two", PASSWORD);
+  ids.bdeSearchAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-search@example.com", "Bde Search", PASSWORD);
+  ids.executiveAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-executive@example.com", "Test Executive", PASSWORD);
 
   await service.from("user_roles").insert([
     { tenant_id: ids.tenantId, user_id: ids.bdeAdvisoryAuthId, role: "bde", practice_line_id: ids.advisoryPracticeLineId },
+    { tenant_id: ids.tenantId, user_id: ids.bdeAdvisory2AuthId, role: "bde", practice_line_id: ids.advisoryPracticeLineId },
     { tenant_id: ids.tenantId, user_id: ids.bdeSearchAuthId, role: "bde", practice_line_id: ids.searchPracticeLineId },
     { tenant_id: ids.tenantId, user_id: ids.executiveAuthId, role: "executive", practice_line_id: null },
   ]);
@@ -246,5 +235,107 @@ describe("listPipelineDeals, filters", () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
     const deals = await listPipelineDeals(client, { clientType: "existing" });
     expect(deals).toHaveLength(0);
+  });
+});
+
+// Deliberately ordered last and reusing advisoryDealId (rather than a dedicated deal): every
+// earlier test above asserts something about advisoryDealId's stage or the tenant's total deal
+// count, so the one genuinely mutating test in this block - the successful move - runs only after
+// all of those have already passed. The three rejection cases don't mutate anything, so their
+// order relative to each other doesn't matter.
+describe("changeStage", () => {
+  it("refuses to move a deal into a won/lost stage - that's closeDeal's job (M5.2), not built yet", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.wonStageId);
+    expect(result).toEqual({ ok: false, code: "target_is_closing_stage" });
+
+    const { data: dealRow } = await service.from("deals").select("stage_id").eq("id", ids.advisoryDealId).single();
+    expect(dealRow?.stage_id).toBe(ids.discoveryStageId);
+  });
+
+  it("refuses a no-op move to the deal's current stage", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.discoveryStageId);
+    expect(result).toEqual({ ok: false, code: "same_stage" });
+  });
+
+  it("a bde from a different practice line can't even see the deal to move it - not_found, not denied", async () => {
+    // A real, worthwhile distinction, not a rounding error: changeStage reads the deal through the
+    // CALLER's own RLS-scoped session (getDealForStageChange), and migration 0005's deals_select
+    // policy already excludes rows outside the caller's practice entitlement entirely. So this
+    // request never reaches can() at all - it fails at the read, before authorisation logic runs -
+    // and correctly reports not_found rather than denied, the same not-confirming-existence-to-an-
+    // unauthorised-caller pattern a 404-instead-of-403 API response uses. The next test below
+    // proves the different case: a same-practice bde who CAN see the deal (deal.view is
+    // practice-scoped) but isn't its owner/co-owner/author gets a real "denied" from can().
+    const client = await signIn("m1-4-bde-search@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.proposalStageId);
+    expect(result).toEqual({ ok: false, code: "not_found" });
+
+    const { data: dealRow } = await service.from("deals").select("stage_id").eq("id", ids.advisoryDealId).single();
+    expect(dealRow?.stage_id).toBe(ids.discoveryStageId);
+  });
+
+  it("a same-practice bde who can see the deal but doesn't own/co-own/author it is really denied", async () => {
+    const client = await signIn("m1-4-bde-advisory-2@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    // Confirms this bde genuinely can see the deal (deal.view is practice-scoped) - ruling out the
+    // not_found case above before asserting the denial is a real can() denial, not a masked read
+    // failure of a different kind.
+    const visible = await listPipelineDeals(client, {});
+    expect(visible.some((d) => d.id === ids.advisoryDealId)).toBe(true);
+
+    const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.proposalStageId);
+    expect(result).toEqual({ ok: false, code: "denied" });
+
+    const { data: dealRow } = await service.from("deals").select("stage_id").eq("id", ids.advisoryDealId).single();
+    expect(dealRow?.stage_id).toBe(ids.discoveryStageId);
+  });
+
+  it("the owning bde moves their deal to another open stage; exactly one audit row is written", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.proposalStageId);
+    expect(result).toEqual({ ok: true });
+
+    // Not asserting updated_at/updated_by here: migration 0006 (the trigger that maintains them)
+    // is verified locally in tests/rls/deals_foundation.spec.ts, against a real per-user Postgres
+    // session, but this container has no raw-TCP egress to the hosted project's database and no
+    // valid Supabase Management API token in this session to run DDL through instead - so 0006
+    // has not yet been mirrored onto the real project the way migration 0005 was. Flagged as an
+    // outstanding manual step (see README.md's M1.5 entry), not silently assumed done.
+    const { data: dealRow } = await service.from("deals").select("stage_id").eq("id", ids.advisoryDealId).single();
+    expect(dealRow?.stage_id).toBe(ids.proposalStageId);
+
+    const { data: auditRows } = await service
+      .from("audit_entries")
+      .select("action, actor_id, before, after")
+      .eq("entity_id", ids.advisoryDealId)
+      .eq("action", "deal.change_stage");
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows?.[0]).toMatchObject({
+      action: "deal.change_stage",
+      actor_id: ids.bdeAdvisoryAuthId,
+      before: { stageId: ids.discoveryStageId },
+      after: { stageId: ids.proposalStageId },
+    });
   });
 });

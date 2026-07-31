@@ -5,6 +5,7 @@ import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { getCachedActor } from "../_actor";
 import { checkRouteAccess } from "../_access";
+import { PipelineBoard } from "./PipelineBoard";
 import { PipelineFilters } from "./PipelineFilters";
 import { PipelineTable } from "./PipelineTable";
 
@@ -36,6 +37,19 @@ interface SearchParams {
   status?: string;
   closeFrom?: string;
   closeTo?: string;
+  view?: string;
+}
+
+// Builds the other view's link, preserving every current filter - docs/06-ui-spec.md's Pipeline
+// screen is one screen with two views ("Board and table, as today"), not two separate filter sets.
+function viewToggleHref(params: SearchParams, targetView: "table" | "board"): string {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (key !== "view" && value) query.set(key, value);
+  }
+  if (targetView === "board") query.set("view", "board");
+  const queryString = query.toString();
+  return queryString ? `/deals?${queryString}` : "/deals";
 }
 
 export default async function DealsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
@@ -65,19 +79,38 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
   ]);
 
   const hasAnyFilter = Object.values(filters).some((v) => v !== undefined);
+  const view = params.view === "board" ? "board" : "table";
 
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-ink">Pipeline</h1>
-        {canCreate ? (
-          <a
-            href="/deals/new"
-            className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            New deal
-          </a>
-        ) : null}
+        <div className="flex items-center gap-3">
+          <div className="flex overflow-hidden rounded-token border border-line text-sm">
+            <a
+              href={viewToggleHref(params, "table")}
+              aria-current={view === "table" ? "page" : undefined}
+              className={`px-3 py-1.5 ${view === "table" ? "bg-accent text-surface" : "bg-surface text-ink"}`}
+            >
+              Table
+            </a>
+            <a
+              href={viewToggleHref(params, "board")}
+              aria-current={view === "board" ? "page" : undefined}
+              className={`px-3 py-1.5 ${view === "board" ? "bg-accent text-surface" : "bg-surface text-ink"}`}
+            >
+              Board
+            </a>
+          </div>
+          {canCreate ? (
+            <a
+              href="/deals/new"
+              className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              New deal
+            </a>
+          ) : null}
+        </div>
       </div>
 
       <PipelineFilters
@@ -96,6 +129,7 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
           closeFrom: params.closeFrom,
           closeTo: params.closeTo,
         }}
+        view={view === "board" ? "board" : undefined}
       />
 
       {deals.length === 0 ? (
@@ -108,6 +142,8 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
           }
           action={canCreate && !hasAnyFilter ? { label: "New deal", href: "/deals/new" } : undefined}
         />
+      ) : view === "board" ? (
+        <PipelineBoard deals={deals} stages={filterOptions.stages} />
       ) : (
         <PipelineTable deals={deals} />
       )}

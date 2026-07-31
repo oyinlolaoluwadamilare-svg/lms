@@ -1,11 +1,14 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Actor } from "@/auth/permissions";
 import { listAccounts } from "@/data/accounts";
+import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import {
   DealReferenceConflictError,
+  getDealForStageChange,
   insertDeal,
   listDeals,
   nextDealReference,
+  updateDealStage,
   type DealListFilters,
   type DealListRow,
   type InsertedDeal,
@@ -14,11 +17,13 @@ import {
 // src/data directly (eslint.config.mjs boundaries), including for types.
 export type { DealListFilters, DealListRow };
 import { listPracticeLines } from "@/data/practiceLines";
-import { listAllStages, listOpenStages, type PipelineStageOption } from "@/data/pipelineStages";
+import { getStageById, listAllStages, listOpenStages, type PipelineStageOption } from "@/data/pipelineStages";
+// Re-exported for the same reason as DealListFilters/DealListRow above.
+export type { PipelineStageOption };
 import { listActiveUsersInTenant } from "@/data/users";
 import { writeAudit } from "@/services/audit";
 import type { AppUser } from "@/domain/user";
-import type { ClientType } from "@/domain/deal";
+import { isOpenStage, type ClientType } from "@/domain/deal";
 
 export interface CreateDealInput {
   name: string;
@@ -156,4 +161,75 @@ export async function getPipelineFilterOptions(supabase: SupabaseClient): Promis
 // unlike a write there is no "resource that doesn't exist yet" to check against).
 export async function listPipelineDeals(supabase: SupabaseClient, filters: DealListFilters): Promise<DealListRow[]> {
   return listDeals(supabase, filters);
+}
+
+export type ChangeStageResult =
+  | { ok: true }
+  | { ok: false; code: "not_found" | "denied" | "same_stage" | "target_is_closing_stage" };
+
+// The single path for moving a deal's stage (docs/03-architecture.md's single-path rule: "the only
+// way a deal's stage changes... No caller updates deals.stage_id directly, ever"). Called by the
+// board drag today; the edit form (M1.7), bulk actions and the API must route through this too when
+// they exist, per that same rule.
+//
+// Two things this function decides unconditionally, the same way createDeal pins authorId:
+// 1. can() is checked here even though RLS's deals_update policy (migration 0005) enforces the same
+//    scope independently (CLAUDE.md #1 - a second, independent control, not the only one).
+// 2. The target stage must be an "open" stage_type. Moving a deal into a won/lost stage is the
+//    exclusive job of closeDeal (docs/07-build-backlog.md M5.2, not built yet), which requires an
+//    outcome reason this function has no way to collect or enforce - see isOpenStage's comment in
+//    src/domain/deal.ts. Rejecting here, not merely declining to render a drop target in the UI, is
+//    what makes this a real control and not presentation-only (CLAUDE.md #1).
+//
+// Known gap, same one src/services/audit.ts's own comment already flags for every compound write in
+// this Supabase-client architecture: the deal update and the audit write below are two separate
+// calls, not one transaction. If the audit write throws, the stage has already changed, un-audited.
+// M2.1's stage_events table (and the Postgres-function-backed atomic writer that comment calls for)
+// is the real fix; not built yet.
+export async function changeStage(
+  supabase: SupabaseClient,
+  actor: Actor,
+  dealId: string,
+  toStageId: string,
+): Promise<ChangeStageResult> {
+  const deal = await getDealForStageChange(supabase, dealId);
+  if (!deal) return { ok: false, code: "not_found" };
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  const resource = {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  };
+  if (!can(actor, "deal.change_stage", resource)) {
+    return { ok: false, code: "denied" };
+  }
+
+  if (toStageId === deal.stageId) {
+    return { ok: false, code: "same_stage" };
+  }
+
+  const toStage = await getStageById(supabase, toStageId);
+  if (!toStage || toStage.tenantId !== actor.tenantId) {
+    return { ok: false, code: "not_found" };
+  }
+  if (!isOpenStage(toStage.stageType)) {
+    return { ok: false, code: "target_is_closing_stage" };
+  }
+
+  await updateDealStage(supabase, dealId, toStageId);
+
+  await writeAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.id,
+    entityType: "deal",
+    entityId: dealId,
+    action: "deal.change_stage",
+    before: { stageId: deal.stageId },
+    after: { stageId: toStageId },
+  });
+
+  return { ok: true };
 }
