@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/browser";
 import { UpdatePasswordForm } from "./UpdatePasswordForm";
 
@@ -47,9 +48,9 @@ export function UpdatePasswordGate() {
         <p role="alert" className="text-sm text-lost">
           This link is invalid or has expired.
         </p>
-        <a href="/reset-password" className="text-sm text-accent underline underline-offset-2">
+        <Link href="/reset-password" className="text-sm text-accent underline underline-offset-2">
           Request a new reset link
-        </a>
+        </Link>
       </div>
     );
   }

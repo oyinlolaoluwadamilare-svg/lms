@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { formatMoney } from "@/domain/money";
 import type { DealListRow, PipelineStageOption } from "@/services/deals";
@@ -158,7 +159,9 @@ function BoardColumn({
             onDragStart={() => onCardDragStart(deal.id)}
             className="cursor-grab rounded-token border border-line bg-surface p-2 text-[13.5px] active:cursor-grabbing"
           >
-            <p className="font-medium text-ink">{deal.name}</p>
+            <Link href={`/deals/${deal.id}`} prefetch={false} className="font-medium text-ink hover:text-accent hover:underline">
+              {deal.name}
+            </Link>
             <p className="text-xs text-muted">
               {deal.reference} · {deal.accountName}
             </p>

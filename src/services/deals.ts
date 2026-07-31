@@ -4,18 +4,20 @@ import { listAccounts } from "@/data/accounts";
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import {
   DealReferenceConflictError,
+  getDealDetail as getDealDetailRow,
   getDealForStageChange,
   insertDeal,
   listDeals,
   nextDealReference,
   updateDealStage,
+  type DealDetail,
   type DealListFilters,
   type DealListRow,
   type InsertedDeal,
 } from "@/data/deals";
 // Re-exported so app/(app)/deals only needs to import from this module - app may not import
 // src/data directly (eslint.config.mjs boundaries), including for types.
-export type { DealListFilters, DealListRow };
+export type { DealDetail, DealListFilters, DealListRow };
 import { listPracticeLines } from "@/data/practiceLines";
 import { getStageById, listAllStages, listOpenStages, type PipelineStageOption } from "@/data/pipelineStages";
 // Re-exported for the same reason as DealListFilters/DealListRow above.
@@ -232,4 +234,12 @@ export async function changeStage(
   });
 
   return { ok: true };
+}
+
+// Passthrough so app/(app)/deals/[id]/page.tsx doesn't import src/data directly. No separate can()
+// check here, same reasoning as listPipelineDeals: migration 0005's deals_select RLS policy is
+// this read's authorisation boundary, and getDealDetail already reads through the caller's own
+// session, not a service-role client.
+export async function getDealDetail(supabase: SupabaseClient, dealId: string): Promise<DealDetail | null> {
+  return getDealDetailRow(supabase, dealId);
 }

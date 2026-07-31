@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { requestResetAction, type RequestResetState } from "./actions";
 
 export function ResetPasswordForm() {
@@ -47,9 +48,9 @@ export function ResetPasswordForm() {
         {pending ? "Sending…" : "Send reset link"}
       </button>
 
-      <a href="/sign-in" className="text-sm text-muted underline underline-offset-2">
+      <Link href="/sign-in" className="text-sm text-muted underline underline-offset-2">
         Back to sign in
-      </a>
+      </Link>
     </form>
   );
 }

@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getSessionActor } from "@/services/actor";
-import { changeStage, listPipelineDeals } from "@/services/deals";
+import { changeStage, getDealDetail, listPipelineDeals } from "@/services/deals";
 import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M1.4/M1.5 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced
@@ -37,6 +37,7 @@ const ids = {
   searchAccountId: "",
   bdeAdvisoryAuthId: "",
   bdeAdvisory2AuthId: "",
+  bdeAdvisory3AuthId: "",
   bdeSearchAuthId: "",
   executiveAuthId: "",
   advisoryDealId: "",
@@ -45,6 +46,7 @@ const ids = {
 
 async function cleanup() {
   if (!ids.tenantId) return;
+  await service.from("deal_co_owners").delete().eq("deal_id", ids.advisoryDealId);
   await service.from("deals").delete().eq("tenant_id", ids.tenantId);
   await service.from("account_practice_owners").delete().in("account_id", [ids.advisoryAccountId, ids.searchAccountId]);
   await service.from("accounts").delete().eq("tenant_id", ids.tenantId);
@@ -95,7 +97,7 @@ beforeAll(async () => {
   const { data: accounts, error: accountsError } = await service
     .from("accounts")
     .insert([
-      { tenant_id: ids.tenantId, name: "Advisory Client" },
+      { tenant_id: ids.tenantId, name: "Advisory Client", industry: "Financial Services", region: "West Africa" },
       { tenant_id: ids.tenantId, name: "Search Client" },
     ])
     .select("id, name");
@@ -105,12 +107,14 @@ beforeAll(async () => {
 
   ids.bdeAdvisoryAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory@example.com", "Bde Advisory", PASSWORD);
   ids.bdeAdvisory2AuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory-2@example.com", "Bde Advisory Two", PASSWORD);
+  ids.bdeAdvisory3AuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory-3@example.com", "Bde Advisory Three", PASSWORD);
   ids.bdeSearchAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-search@example.com", "Bde Search", PASSWORD);
   ids.executiveAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-executive@example.com", "Test Executive", PASSWORD);
 
   await service.from("user_roles").insert([
     { tenant_id: ids.tenantId, user_id: ids.bdeAdvisoryAuthId, role: "bde", practice_line_id: ids.advisoryPracticeLineId },
     { tenant_id: ids.tenantId, user_id: ids.bdeAdvisory2AuthId, role: "bde", practice_line_id: ids.advisoryPracticeLineId },
+    { tenant_id: ids.tenantId, user_id: ids.bdeAdvisory3AuthId, role: "bde", practice_line_id: ids.advisoryPracticeLineId },
     { tenant_id: ids.tenantId, user_id: ids.bdeSearchAuthId, role: "bde", practice_line_id: ids.searchPracticeLineId },
     { tenant_id: ids.tenantId, user_id: ids.executiveAuthId, role: "executive", practice_line_id: null },
   ]);
@@ -164,6 +168,8 @@ beforeAll(async () => {
     .single();
   if (searchDealError) throw new Error(`seed search deal failed: ${searchDealError.message}`);
   ids.searchDealId = searchDeal.id;
+
+  await service.from("deal_co_owners").insert({ deal_id: ids.advisoryDealId, user_id: ids.bdeAdvisory3AuthId });
 });
 
 afterAll(cleanup);
@@ -235,6 +241,57 @@ describe("listPipelineDeals, filters", () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
     const deals = await listPipelineDeals(client, { clientType: "existing" });
     expect(deals).toHaveLength(0);
+  });
+});
+
+// M1.6 exit criteria (docs/07-build-backlog.md): "Deal detail read-only skeleton: header, financial
+// summary, details, account." Deliberately runs before the changeStage describe block below, which
+// mutates advisoryDealId's stage - these assertions are against its original Discovery-stage state.
+describe("getDealDetail", () => {
+  it("returns the full header/financial/details/account shape for a practice-entitled bde", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const deal = await getDealDetail(client, ids.advisoryDealId);
+
+    expect(deal).not.toBeNull();
+    expect(deal).toMatchObject({
+      id: ids.advisoryDealId,
+      reference: "D-4001",
+      name: "Advisory Pipeline Deal",
+      status: "active",
+      clientType: "new",
+      forecastCategory: "pipeline",
+      expectedCloseDate: "2027-03-01",
+      actualCloseDate: null,
+      probability: 20, // no override, so the Discovery stage's own threshold applies
+      value: { amountMinor: 100_000_000n, currency: "NGN" },
+      weightedValue: { amountMinor: 20_000_000n, currency: "NGN" },
+      proposalValue: { amountMinor: 100_000_000n, currency: "NGN" },
+      negotiatedValue: null,
+      stage: { id: ids.discoveryStageId, name: "Discovery", stageType: "open" },
+      account: { id: ids.advisoryAccountId, name: "Advisory Client", industry: "Financial Services", region: "West Africa" },
+      practiceLineName: "Advisory",
+      ownerName: "Bde Advisory",
+      authorName: "Bde Advisory",
+      coOwnerNames: ["Bde Advisory Three"],
+    });
+  });
+
+  it("an executive (tenant-wide view) can also read it", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const deal = await getDealDetail(client, ids.advisoryDealId);
+    expect(deal?.id).toBe(ids.advisoryDealId);
+  });
+
+  it("a bde outside the deal's practice gets null - RLS excludes the row entirely, same as changeStage's not_found case", async () => {
+    const client = await signIn("m1-4-bde-search@example.com");
+    const deal = await getDealDetail(client, ids.advisoryDealId);
+    expect(deal).toBeNull();
+  });
+
+  it("a nonexistent deal id returns null, not an error", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const deal = await getDealDetail(client, "00000000-0000-0000-0000-000000000000");
+    expect(deal).toBeNull();
   });
 });
 

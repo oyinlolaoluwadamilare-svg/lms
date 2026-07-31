@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { can } from "@/auth/permissions";
 import { createClient } from "@/lib/supabase/server";
+import { viewToggleHref, type PipelineSearchParams } from "@/lib/pipelineViewLinks";
 import { getPipelineFilterOptions, listPipelineDeals, type DealListFilters } from "@/services/deals";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
@@ -27,30 +29,7 @@ function dateOrUndefined(value: string | undefined): string | undefined {
   return value && DATE_RE.test(value) ? value : undefined;
 }
 
-interface SearchParams {
-  stage?: string;
-  owner?: string;
-  practiceLine?: string;
-  account?: string;
-  clientType?: string;
-  forecastCategory?: string;
-  status?: string;
-  closeFrom?: string;
-  closeTo?: string;
-  view?: string;
-}
-
-// Builds the other view's link, preserving every current filter - docs/06-ui-spec.md's Pipeline
-// screen is one screen with two views ("Board and table, as today"), not two separate filter sets.
-function viewToggleHref(params: SearchParams, targetView: "table" | "board"): string {
-  const query = new URLSearchParams();
-  for (const [key, value] of Object.entries(params)) {
-    if (key !== "view" && value) query.set(key, value);
-  }
-  if (targetView === "board") query.set("view", "board");
-  const queryString = query.toString();
-  return queryString ? `/deals?${queryString}` : "/deals";
-}
+type SearchParams = PipelineSearchParams;
 
 export default async function DealsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const { allowed } = await checkRouteAccess("/deals");
@@ -87,28 +66,34 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
         <h1 className="text-xl font-semibold text-ink">Pipeline</h1>
         <div className="flex items-center gap-3">
           <div className="flex overflow-hidden rounded-token border border-line text-sm">
-            <a
+            {/* prefetch={false} throughout this page: every destination is dynamic and
+                RLS-gated (filtered results, a fresh form, a different view of the same data) -
+                see src/ui/nav/Nav.tsx's comment for the full reasoning. */}
+            <Link
               href={viewToggleHref(params, "table")}
+              prefetch={false}
               aria-current={view === "table" ? "page" : undefined}
               className={`px-3 py-1.5 ${view === "table" ? "bg-accent text-surface" : "bg-surface text-ink"}`}
             >
               Table
-            </a>
-            <a
+            </Link>
+            <Link
               href={viewToggleHref(params, "board")}
+              prefetch={false}
               aria-current={view === "board" ? "page" : undefined}
               className={`px-3 py-1.5 ${view === "board" ? "bg-accent text-surface" : "bg-surface text-ink"}`}
             >
               Board
-            </a>
+            </Link>
           </div>
           {canCreate ? (
-            <a
+            <Link
               href="/deals/new"
+              prefetch={false}
               className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
               New deal
-            </a>
+            </Link>
           ) : null}
         </div>
       </div>

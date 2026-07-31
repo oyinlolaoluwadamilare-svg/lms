@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 interface Option {
   id: string;
   label: string;
@@ -92,12 +94,13 @@ export function PipelineFilters({
         >
           Apply filters
         </button>
-        <a
+        <Link
           href="/deals"
+          prefetch={false}
           className="rounded-token border border-line px-4 py-2 text-sm font-medium text-ink outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           Clear
-        </a>
+        </Link>
       </div>
     </form>
   );

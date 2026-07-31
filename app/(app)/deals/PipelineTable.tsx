@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { formatMoney } from "@/domain/money";
 import type { DealListRow } from "@/services/deals";
 
@@ -16,9 +17,6 @@ const STATUS_LABEL: Record<DealListRow["status"], string> = {
   on_hold: "On hold",
 };
 
-// Reference/name are deliberately plain text, not a link to /deals/[id] - that route doesn't
-// exist yet (docs/07-build-backlog.md M1.6, a later milestone), and a link to a 404 is worse than
-// no link.
 export function PipelineTable({ deals }: { deals: DealListRow[] }) {
   return (
     <div className="overflow-x-auto rounded-token border border-line">
@@ -42,7 +40,11 @@ export function PipelineTable({ deals }: { deals: DealListRow[] }) {
         <tbody>
           {deals.map((deal) => (
             <tr key={deal.id} className="border-t border-line">
-              <Td className="font-medium">{deal.reference}</Td>
+              <Td className="font-medium">
+                <Link href={`/deals/${deal.id}`} prefetch={false} className="text-accent underline-offset-2 hover:underline">
+                  {deal.reference}
+                </Link>
+              </Td>
               <Td>{deal.name}</Td>
               <Td>{deal.accountName}</Td>
               <Td>{deal.practiceLineName}</Td>

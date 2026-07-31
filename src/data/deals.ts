@@ -3,6 +3,7 @@ import { parseMoneyMinor, type Money } from "@/domain/money";
 import {
   dealValue,
   formatDealReference,
+  resolveProbability,
   weightedValue,
   type ClientType,
   type DealForCalculation,
@@ -327,4 +328,140 @@ export async function updateDealStage(supabase: SupabaseClient, dealId: string, 
   const { error } = await supabase.from("deals").update({ stage_id: toStageId }).eq("id", dealId);
 
   if (error) throw new Error(`updateDealStage failed: ${error.message}`);
+}
+
+// M1.6 exit criteria (docs/07-build-backlog.md): "Deal detail read-only skeleton: header, financial
+// summary, details, account." Deliberately narrower than docs/06-ui-spec.md's full Deal detail
+// spec: the engagement timeline, stakeholders, open tasks, next-action strip and last-engaged chip
+// all depend on entities/columns that don't exist yet (activities: M3+; tasks: M4+; last_engaged_at
+// exists on the table already but nothing populates it until an activity entity does) - building
+// against those now would show fake functionality for every deal, the same reasoning M1.4 already
+// applied to its filter set.
+export interface DealDetail {
+  id: string;
+  reference: string;
+  name: string;
+  status: DealStatus;
+  clientType: ClientType;
+  brief: string | null;
+  expectedCloseDate: string | null;
+  actualCloseDate: string | null;
+  forecastCategory: ForecastCategory;
+  probability: number;
+  value: Money | null;
+  weightedValue: Money | null;
+  proposalValue: Money | null;
+  negotiatedValue: Money | null;
+  stage: { id: string; name: string; stageType: StageType };
+  account: { id: string; name: string; industry: string | null; region: string | null };
+  practiceLineName: string;
+  ownerName: string | null;
+  authorName: string;
+  coOwnerNames: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface DealDetailRow {
+  id: string;
+  reference: string;
+  name: string;
+  status: DealStatus;
+  client_type: ClientType;
+  brief: string | null;
+  expected_close_date: string | null;
+  actual_close_date: string | null;
+  forecast_category: ForecastCategory;
+  proposal_value_minor: string | null;
+  negotiated_value_minor: string | null;
+  currency_code: string;
+  probability_override: number | null;
+  created_at: string;
+  updated_at: string;
+  accounts: { id: string; name: string; industry: string | null; region: string | null } | null;
+  practice_lines: { name: string } | null;
+  pipeline_stages: { id: string; name: string; stage_type: StageType; probability_threshold: number } | null;
+  owner: { full_name: string } | null;
+  author: { full_name: string } | null;
+  deal_co_owners: Array<{ user: { full_name: string } | null }>;
+}
+
+// Reads through the CALLER's own RLS-scoped session, same as listDeals - migration 0005's
+// deals_select policy is the authorisation boundary, not a separate can() check here. Returns null
+// both when the deal genuinely doesn't exist and when it exists but RLS excludes it from this
+// caller's view; deliberately not distinguished, the same not-confirming-existence-to-an-
+// unauthorised-caller shape src/services/deals.ts's changeStage already established for
+// "not_found" - the caller (the deal detail page) renders one honest "not found" state either way.
+export async function getDealDetail(supabase: SupabaseClient, dealId: string): Promise<DealDetail | null> {
+  const { data, error } = await supabase
+    .from("deals")
+    .select(
+      "id, reference, name, status, client_type, brief, expected_close_date, actual_close_date, " +
+        "forecast_category, proposal_value_minor::text, negotiated_value_minor::text, currency_code, " +
+        "probability_override, created_at, updated_at, " +
+        "accounts(id, name, industry, region), practice_lines(name), " +
+        "pipeline_stages(id, name, stage_type, probability_threshold), " +
+        "owner:users!owner_id(full_name), author:users!author_id(full_name), " +
+        "deal_co_owners(user:users!user_id(full_name))",
+    )
+    .eq("id", dealId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) throw new Error(`getDealDetail failed: ${error.message}`);
+  if (!data) return null;
+
+  const row = data as unknown as DealDetailRow;
+  if (!row.pipeline_stages) {
+    throw new Error(`deal ${dealId} has no resolvable stage (stage_id is not-null, but the join returned nothing)`);
+  }
+  if (!row.accounts) {
+    throw new Error(`deal ${dealId} has no resolvable account (account_id is not-null, but the join returned nothing)`);
+  }
+  if (!row.practice_lines) {
+    throw new Error(`deal ${dealId} has no resolvable practice line (practice_line_id is not-null, but the join returned nothing)`);
+  }
+  if (!row.author) {
+    throw new Error(`deal ${dealId} has no resolvable author (author_id is not-null, but the join returned nothing)`);
+  }
+
+  const dealForCalc: DealForCalculation = {
+    proposalValueMinor: parseMoneyMinor(row.proposal_value_minor),
+    negotiatedValueMinor: parseMoneyMinor(row.negotiated_value_minor),
+    currencyCode: row.currency_code,
+    probabilityOverride: row.probability_override,
+  };
+  const stageForCalc: StageForCalculation = { probabilityThreshold: row.pipeline_stages.probability_threshold };
+
+  return {
+    id: row.id,
+    reference: row.reference,
+    name: row.name,
+    status: row.status,
+    clientType: row.client_type,
+    brief: row.brief,
+    expectedCloseDate: row.expected_close_date,
+    actualCloseDate: row.actual_close_date,
+    forecastCategory: row.forecast_category,
+    probability: resolveProbability(dealForCalc, stageForCalc),
+    value: dealValue(dealForCalc),
+    weightedValue: weightedValue(dealForCalc, stageForCalc),
+    proposalValue:
+      dealForCalc.proposalValueMinor === null ? null : { amountMinor: dealForCalc.proposalValueMinor, currency: row.currency_code },
+    negotiatedValue:
+      dealForCalc.negotiatedValueMinor === null ? null : { amountMinor: dealForCalc.negotiatedValueMinor, currency: row.currency_code },
+    stage: { id: row.pipeline_stages.id, name: row.pipeline_stages.name, stageType: row.pipeline_stages.stage_type },
+    account: {
+      id: row.accounts.id,
+      name: row.accounts.name,
+      industry: row.accounts.industry,
+      region: row.accounts.region,
+    },
+    practiceLineName: row.practice_lines.name,
+    ownerName: row.owner?.full_name ?? null,
+    authorName: row.author.full_name,
+    coOwnerNames: row.deal_co_owners.map((co) => co.user?.full_name).filter((name): name is string => Boolean(name)),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import Link from "next/link";
 import { signInAction, type SignInState } from "./actions";
 
 export function SignInForm({ next }: { next: string }) {
@@ -52,9 +53,9 @@ export function SignInForm({ next }: { next: string }) {
         {pending ? "Signing in…" : "Sign in"}
       </button>
 
-      <a href="/reset-password" className="text-sm text-muted underline underline-offset-2">
+      <Link href="/reset-password" className="text-sm text-muted underline underline-offset-2">
         Forgot your password?
-      </a>
+      </Link>
     </form>
   );
 }

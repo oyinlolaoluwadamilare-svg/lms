@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 // docs/06-ui-spec.md: "empty (explains the next action, not merely that there is nothing there)."
 export function EmptyState({
   title,
@@ -13,12 +15,13 @@ export function EmptyState({
       <p className="font-medium text-ink">{title}</p>
       <p className="text-sm text-muted">{description}</p>
       {action ? (
-        <a
+        <Link
           href={action.href}
+          prefetch={false}
           className="mt-2 rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           {action.label}
-        </a>
+        </Link>
       ) : null}
     </div>
   );

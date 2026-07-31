@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 export default function AccountSuspendedPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
@@ -6,9 +8,9 @@ export default function AccountSuspendedPage() {
         This account has been suspended or deactivated. Contact your tenant administrator if you
         believe this is a mistake.
       </p>
-      <a href="/sign-in" className="text-sm text-accent underline underline-offset-2">
+      <Link href="/sign-in" className="text-sm text-accent underline underline-offset-2">
         Back to sign in
-      </a>
+      </Link>
     </main>
   );
 }
