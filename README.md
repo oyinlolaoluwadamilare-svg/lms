@@ -1077,6 +1077,81 @@ Verified: typecheck, lint (unchanged), unit (206, unchanged - no `dates.ts` chan
 consecutively), and the full Playwright e2e suite (11, unchanged) all green. No UI changed, so no
 manual browser QA was needed for this milestone.
 
+## M4 — Tasks and delegation ⚑
+
+**M4.1** (`tasks`, `task_assignments`, `task_comments`, `task_watchers` migrations) is implemented
+and verified. Schema-only milestone - no service or UI layer yet, that's M4.2 (`assignTask`) and
+M4.3 (the Add Task modal) onward.
+
+`db/schema.sql` already had a near-complete reference implementation for all four tables plus the
+`blocked_needs_reason`/`done_needs_completion` constraints this milestone's own backlog line names
+verbatim - but, consistent with every prior migration's own scrutiny of that reference kit, several
+real gaps and deliberate deviations were found and corrected rather than silently reproduced:
+
+- `contact_id` is deferred - it references `contacts(id)`, and `contacts` (M5.5) doesn't exist yet,
+  the identical "can't reference a table that isn't there" reasoning already applied twice before
+  (`activity_contacts`, M3.1; `documents.contact_id`, M3.8).
+- The `next_action_task_id`/`next_action_due_date` derivation trigger
+  (`refresh_deal_next_action()`, already fully written in `db/schema.sql`) is deliberately **not**
+  built here - `docs/07-build-backlog.md` names it explicitly as **M4.4**'s own deliverable, the
+  same structure-then-cross-table-trigger split M3.1/M3.2 already established for the engagement
+  trigger.
+- `updated_by` is added to `tasks`, which `db/schema.sql` omits - the identical gap migration 0005
+  already found and fixed for `accounts`/`deals` against `docs/01-domain-model.md`'s own general
+  rule, applied here for the same reason.
+- RLS substitutes `deal_practice_line_id()`/`deal_owner_id()`/`deal_author_id()`/
+  `is_deal_co_owner()` for `db/schema.sql`'s own raw `exists (select 1 from deals ...)` joins, the
+  identical cross-table RLS recursion avoidance migrations 0007/0008/0010 already established for
+  the same substitution. Four new helper functions (`task_tenant_id`/`task_deal_id`/
+  `task_assignee_id`/`task_assigned_by`) resolve `task_assignments`/`task_comments`/`task_watchers`'
+  own policies through the parent `tasks` row, the same shape `deal_co_owners` already established
+  via `deal_tenant_id()`/`deal_practice_line_id()` for a child table with no `tenant_id` of its own.
+
+**A genuine, direct doc conflict, flagged and resolved by explicit product-owner decision rather
+than silently picked**: `docs/01-domain-model.md`'s own `tasks` field list says `due_date (NOT
+NULL)`, but `docs/06-ui-spec.md`'s My Work screen names a "No date" grouping bucket, which only
+makes sense if a task can have no due date at all. Asked; decided: `due_date` stays **NOT NULL**,
+following the domain model literally - the "No date" bucket (M4.5, not built yet) will simply always
+be empty in this codebase for now, the same narrower-than-spec-UI shape this project has taken
+repeatedly rather than loosening a NOT NULL constraint on a guess.
+
+Two further scope decisions were deferred rather than guessed, each flagged in the migration itself:
+`task_comments.resolved_at`/`resolved_by`'s mutation path (who may resolve a comment, and how) is
+undocumented anywhere and named by no M4 backlog line - no UPDATE policy exists yet for
+`authenticated` (deliberately **not** `forbid_mutation()` either, unlike `task_assignments` - which
+the domain model explicitly calls "the immutable reassignment ledger" - since comment resolution is
+a real, plausible future write path, just not one anything asks for yet); and `snooze_count`'s
+companion reason text (M4.5's own "snooze with reason after two snoozes") has no documented column
+anywhere, so none is added here - that decision belongs to the milestone that actually builds
+snoozing. `task_watchers` gets a SELECT policy only for the same "not invented here" reason
+`deal_co_owners_insert`'s own comment already gives for its analogous gap: no "add watcher" action
+exists in `docs/02-permission-matrix.md` at all yet.
+
+`src/auth/permissions.ts` needed **no changes** - every `task.*` action and its exact
+own/practice/tenant scope per role was already implemented in M0.4, verified here to match
+`docs/02-permission-matrix.md`'s Tasks section cell-for-cell (including its one footnote, on
+`task.assign_to_other`: "co-owners, own team lead, practice peers"). This migration is purely the
+RLS layer underneath that already-correct permission matrix.
+
+New `tests/rls/tasks.spec.ts` (34 tests, against local Postgres - the same primary-verification
+shape every earlier schema-only migration in this repo used before its own service layer existed):
+`blocked_needs_reason`/`done_needs_completion` (rejecting and then accepting each), the `due_date`
+NOT NULL decision, `tasks_select`'s own+assigned+practice/practice/tenant scope (including a
+deal-less "personal task" visible only to its own assignee/assigner, never by practice alone, since
+there is no deal to derive a practice from), `tasks_insert`/`tasks_update`'s matching scope
+(including the fact that RLS deliberately cannot enforce "assignee must be a valid target for my own
+scope" - that's `can()`'s job in the not-yet-built `assignTask` service, the identical
+coarse-RLS/fine-`can()` split `tests/rls/deals_permission_matrix.spec.ts` already documented for
+`deal.change_owner`), `task_assignments`' read-only immutability (`forbid_mutation()` blocking
+update/delete even for the migrator/superuser identity directly), `task_comments`' visible-scoped
+read/write (including that no one can post a comment impersonating a different `author_id`), and
+`task_watchers`' select-only behaviour today. No hard-delete path anywhere, confirmed directly.
+
+Verified: typecheck, lint, unit (206, unchanged), RLS (212, 34 new), integration (69, unchanged - no
+service layer exists yet to exercise against the real hosted project), and the full Playwright e2e
+suite (11, unchanged) all green. Migration tested forward and backward against local Postgres before
+being applied for real; `schema_migrations` on the hosted project now lists `0001` through `0011`.
+
 ## Commands
 
 ```
