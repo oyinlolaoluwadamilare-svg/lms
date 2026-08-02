@@ -88,6 +88,7 @@ export interface StageHistoryEntry {
   id: string;
   fromStageName: string | null;
   toStageName: string;
+  actorId: string | null;
   actorName: string | null;
   occurredAt: string;
   durationInPreviousSeconds: number | null;
@@ -101,6 +102,7 @@ interface StageHistoryRow {
   duration_in_previous_seconds: string | null;
   is_regression: boolean;
   is_reconstructed: boolean;
+  actor_id: string | null;
   from_stage: { name: string } | null;
   to_stage: { name: string } | null;
   actor: { full_name: string } | null;
@@ -121,7 +123,7 @@ export async function listStageEventsForDeal(supabase: SupabaseClient, dealId: s
   const { data, error } = await supabase
     .from("stage_events")
     .select(
-      "id, occurred_at, duration_in_previous_seconds::text, is_regression, is_reconstructed, " +
+      "id, occurred_at, duration_in_previous_seconds::text, is_regression, is_reconstructed, actor_id, " +
         "from_stage:pipeline_stages!from_stage_id(name), to_stage:pipeline_stages!to_stage_id(name), " +
         "actor:users!actor_id(full_name)",
     )
@@ -138,6 +140,7 @@ export async function listStageEventsForDeal(supabase: SupabaseClient, dealId: s
       id: row.id,
       fromStageName: row.from_stage?.name ?? null,
       toStageName: row.to_stage.name,
+      actorId: row.actor_id,
       actorName: row.actor?.full_name ?? null,
       occurredAt: row.occurred_at,
       durationInPreviousSeconds: row.duration_in_previous_seconds === null ? null : Number(row.duration_in_previous_seconds),

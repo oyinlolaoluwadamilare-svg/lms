@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { dateInTimezone, daysBetweenInTimezone, formatDateInTimezone, formatDurationSeconds, resolveTimezone } from "@/lib/dates";
+import {
+  dateInTimezone,
+  daysBetweenInTimezone,
+  formatDateInTimezone,
+  formatDurationSeconds,
+  formatPlainDate,
+  resolveTimezone,
+} from "@/lib/dates";
 
 describe("resolveTimezone", () => {
   it("uses the user's own override when set", () => {
@@ -78,6 +85,20 @@ describe("formatDateInTimezone", () => {
     // 23:45 UTC on 9 March is already 00:45 on 10 March in Africa/Lagos (UTC+1).
     expect(formatDateInTimezone("2026-03-09T23:45:00Z", "UTC")).toBe("09/03/2026");
     expect(formatDateInTimezone("2026-03-09T23:45:00Z", "Africa/Lagos")).toBe("10/03/2026");
+  });
+});
+
+describe("formatPlainDate", () => {
+  it("renders DD/MM/YYYY from a bare YYYY-MM-DD, with no timezone conversion at all", () => {
+    expect(formatPlainDate("2026-03-09")).toBe("09/03/2026");
+  });
+
+  it("never shifts the date, unlike a naive `new Date(str)` parse would risk", () => {
+    // A DATE column has no time-of-day - there is nothing for a timezone to convert. This is the
+    // regression this function's own comment guards against: round-tripping through Date/Intl
+    // could shift a date at a UTC-negative timezone's local midnight boundary.
+    expect(formatPlainDate("2026-01-01")).toBe("01/01/2026");
+    expect(formatPlainDate("2026-12-31")).toBe("31/12/2026");
   });
 });
 

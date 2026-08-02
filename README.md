@@ -12,7 +12,7 @@ Start here, in order:
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
    **M2 — Engagement history is complete** (staleness colour, M2.3's other half, is deliberately
    deferred to M3.7 — see the `## M2` section below). Current milestone: **M3 — Engagement
-   timeline** ⚑, through task M3.4 — see the `## M3` section below.
+   timeline** ⚑, through task M3.5 — see the `## M3` section below.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -718,6 +718,55 @@ recorded here since it looked exactly like one until traced down.
 Verified: typecheck, lint, unit (167, unchanged), RLS (160, unchanged), integration (39 total, the
 fixture fix above), and the full Playwright e2e suite (11) all green - confirmed clean after
 resolving the stale-server artifact.
+
+**M3.5** adds the **Engagement timeline** - merging activities (M3.1/M3.2) and stage events
+(M2.1/M2.2) into one newest-first stream, with type and author filters and a designed empty state
+("No engagement logged yet - log the first conversation," with Log Activity inline, the same
+"action lives where the empty state names it" pattern the pipeline's own "No deals to show yet"
+empty state already established). This **supersedes** M2.4's narrower stage-history-only panel
+rather than sitting alongside it - the merged view was always described as that panel's
+successor.
+
+Three deliberate omissions from `docs/06-ui-spec.md`'s fuller description, each because its
+dependency doesn't exist yet: no "attributed contacts" (`M5.5`), no "edited" marker or revision
+history (`M3.6` - activity edits have existed since M3.1's `activity_date_not_future`/24h-window
+design, but nothing surfaces them yet), and retracted entries aren't rendered struck-through (`M3.6`
+again - no code path sets `retracted_at`, so that would be speculative UI for a state nothing can
+produce). "Type icon" is a text label, not a graphic - no icon system exists in this codebase.
+
+The one real design problem this task had to solve: sorting an activity (`activity_date`, a plain
+`DATE` with no time-of-day) against a stage change (`occurred_at`, a full `TIMESTAMPTZ`) needs a
+common instant. `src/services/engagementTimeline.ts`'s `getEngagementTimeline` treats an activity's
+sort key as noon UTC on its `activity_date` - a pure ordering heuristic, never returned or
+displayed; each entry still carries its own real, distinct date/time field untouched. This is
+deliberately **not** a CLAUDE.md #5 violation ("`activity_date` and `created_at` are different
+things, never conflated in any query, export or API response") - that invariant is about values a
+caller can observe, and this sort key is neither returned nor exported, only used internally to
+interleave two arrays before returning each entry's own honest fields.
+
+Also new: `formatPlainDate` (`src/lib/dates.ts`) - `activity_date` has no timezone to resolve at
+all, so formatting it via `formatDateInTimezone`/`Date`/`Intl` would risk exactly the off-by-one-day
+bug this file's other functions exist to prevent, if a caller ever mis-supplied a timezone. Plain
+string manipulation (`YYYY-MM-DD` → `DD/MM/YYYY`) has no such risk. `ACTIVITY_TYPE_LABELS`/
+`OUTCOME_DISPOSITION_LABELS` were promoted from `LogActivityModal.tsx` (M3.4) into
+`src/domain/activity.ts` once this task's filter dropdown and timeline entries needed the identical
+labels - the same "second caller needing identical logic gets promoted" pattern M3.2 already used
+twice.
+
+New `tests/integration/pipeline-list.spec.ts`'s `getEngagementTimeline` describe block logs two
+real activities onto the same real, permanently-accumulating advisory deal fixture and proves the
+merge against its already-real stage_events history: both new activities and at least one stage
+change appear; the whole merged set is newest-first by each entry's own real field; the `type`
+filter isolates `stage_change` and a specific activity type correctly; the `author` filter matches
+both an activity's author and a stage change's actor by the same person; and an out-of-practice bde
+sees an empty timeline. Manual browser QA against the real `m1-4-integration-test` fixture (with a
+real accumulated history of stage changes and freshly-logged activities) confirmed the rendered
+page: correctly interleaved entries, working type/author filters via URL search params, and no
+console or page errors.
+
+Verified: typecheck, lint, unit (169, 2 new for `formatPlainDate`), RLS (160, unchanged - no new RLS
+surface), integration (41 total, 2 new, against the real hosted project, run twice consecutively),
+and the full Playwright e2e suite (11, unchanged) all green.
 
 ## Commands
 

@@ -2,27 +2,16 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ACTIVITY_TYPES, OUTCOME_DISPOSITIONS, type ActivityType, type OutcomeDisposition } from "@/domain/activity";
+import {
+  ACTIVITY_TYPES,
+  ACTIVITY_TYPE_LABELS,
+  OUTCOME_DISPOSITIONS,
+  OUTCOME_DISPOSITION_LABELS,
+  type ActivityType,
+  type OutcomeDisposition,
+} from "@/domain/activity";
 import { dateInTimezone } from "@/lib/dates";
 import { logActivityAction } from "./logActivityActions";
-
-const TYPE_LABELS: Record<ActivityType, string> = {
-  note: "Note",
-  call: "Call",
-  email: "Email",
-  meeting: "Meeting",
-  follow_up: "Follow-up",
-  site_visit: "Site visit",
-  proposal_walkthrough: "Proposal walkthrough",
-  internal_review: "Internal review",
-};
-
-const DISPOSITION_LABELS: Record<OutcomeDisposition, string> = {
-  positive: "Positive",
-  neutral: "Neutral",
-  negative: "Negative",
-  no_response: "No response",
-};
 
 const DEFAULT_TYPE: ActivityType = "call";
 
@@ -160,7 +149,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
                     type === t ? "border-accent bg-accent text-surface" : "border-line bg-raised text-ink"
                   }`}
                 >
-                  {TYPE_LABELS[t]}
+                  {ACTIVITY_TYPE_LABELS[t]}
                 </button>
               ))}
             </div>
@@ -227,7 +216,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
                   <option value="">—</option>
                   {OUTCOME_DISPOSITIONS.map((d) => (
                     <option key={d} value={d}>
-                      {DISPOSITION_LABELS[d]}
+                      {OUTCOME_DISPOSITION_LABELS[d]}
                     </option>
                   ))}
                 </select>

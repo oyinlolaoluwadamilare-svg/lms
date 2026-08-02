@@ -1,37 +1,52 @@
 import Link from "next/link";
 import { formatMoney } from "@/domain/money";
-import { formatDateInTimezone, formatDurationSeconds } from "@/lib/dates";
+import { ACTIVITY_TYPE_LABELS } from "@/domain/activity";
+import { formatDateInTimezone, formatDurationSeconds, formatPlainDate } from "@/lib/dates";
 import { getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
 import { canLogActivity } from "@/services/activities";
-import { getStageHistory } from "@/services/stageEvents";
+import { getEngagementTimeline, type TimelineFilters as TimelineFilterValues } from "@/services/engagementTimeline";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
 import { LogActivityModal } from "./LogActivityModal";
+import { TimelineFilters } from "./TimelineFilters";
 
 const STAGE_TYPE_LABEL: Record<string, string> = { open: "Open", won: "Won", lost: "Lost" };
 
-export default async function DealDetailPage({ params }: { params: Promise<{ id: string }> }) {
+type SearchParams = { type?: string; author?: string };
+
+export default async function DealDetailPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<SearchParams>;
+}) {
   const { allowed } = await checkRouteAccess("/deals");
   if (!allowed) return <DeniedState message="Pipeline is not available for your role." />;
 
   const { id } = await params;
+  const rawParams = await searchParams;
+  const timelineFilters: TimelineFilterValues = {
+    type: rawParams.type ? (rawParams.type as TimelineFilterValues["type"]) : undefined,
+    authorId: rawParams.author || undefined,
+  };
   const supabase = await createClient();
   const session = await getSessionActor(supabase);
   const timezone = session.status === "active" ? session.timezone : "Africa/Lagos";
 
   // getDealDetail reads through this caller's own RLS-scoped session (migration 0005's
   // deals_select policy) - null means either the deal doesn't exist or this actor can't see it,
-  // deliberately not distinguished (same reasoning as changeStage's not_found case). stageHistory
-  // reads through the same session (stage_events_select, migration 0007) - if the deal itself is
-  // invisible to this actor, this comes back empty rather than erroring, which the early return
-  // below makes moot anyway.
-  const [deal, editView, stageHistory, canLog] = await Promise.all([
+  // deliberately not distinguished (same reasoning as changeStage's not_found case). The
+  // engagement timeline reads through the same session (activities_select/stage_events_select) -
+  // if the deal itself is invisible to this actor, this comes back empty rather than erroring,
+  // which the early return below makes moot anyway.
+  const [deal, editView, timeline, canLog] = await Promise.all([
     getDealDetail(supabase, id),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
-    getStageHistory(supabase, id),
+    getEngagementTimeline(supabase, id, timelineFilters),
     session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
   ]);
 
@@ -68,12 +83,12 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
           Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), stakeholders or open tasks
           here - docs/06-ui-spec.md's full Deal detail spec includes all of these, but every one
           depends on an entity or action that doesn't exist yet (tasks: M4+; mark won/lost:
-          M5.2-M5.3). Log Activity (M3.4) and Edit Deal (M1.7) are the two actions that now exist;
-          the stage-history panel below is M2.4's narrower, stage_events-only precursor to the full
-          "Engagement timeline" the spec describes (M3.5, which will also surface the activities
-          this modal now writes - there is nowhere on this page to see them yet). Otherwise this is
-          the same read-only skeleton docs/07-build-backlog.md M1.6 asked for: header, financial
-          summary, details, account. */}
+          M5.2-M5.3). Log Activity (M3.4) and Edit Deal (M1.7) are the two actions that now exist.
+          The engagement timeline below (M3.5) supersedes M2.4's narrower stage-history-only panel,
+          merging it with the activities this modal writes - see its own section comment for what
+          of the full spec is still deliberately missing (attributed contacts, edit markers,
+          retraction styling). Otherwise this is the same read-only skeleton docs/07-build-backlog.md
+          M1.6 asked for: header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
@@ -135,36 +150,75 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
         </section>
       </div>
 
+      {/* M3.5 (docs/07-build-backlog.md): "Engagement timeline component merging activities and
+          stage events, newest first, with type and author filters and a designed empty state."
+          Narrower than docs/06-ui-spec.md's full description in three ways, each because its
+          dependency doesn't exist yet: no "attributed contacts" (M5.5), no "edited" marker or
+          revision history (M3.6), and retracted entries aren't rendered struck-through (M3.6 - no
+          code path sets retracted_at yet, so that would be speculative UI for a state nothing can
+          produce). "Type icon" is a text label - no icon system exists in this codebase yet. */}
       <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
-        <h2 className="text-sm font-semibold text-ink">Stage history</h2>
-        {stageHistory.length === 0 ? (
-          <p className="text-sm text-muted">No stage transitions recorded yet.</p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-ink">Engagement timeline</h2>
+          <TimelineFilters dealId={deal.id} values={rawParams} authors={timeline.availableAuthors} />
+        </div>
+
+        {timeline.entries.length === 0 ? (
+          <div className="flex flex-col items-center gap-2 py-6 text-center">
+            <p className="font-medium text-ink">No engagement logged yet</p>
+            <p className="text-sm text-muted">Log the first conversation.</p>
+            {canLog ? (
+              <div className="mt-2">
+                <LogActivityModal dealId={deal.id} timezone={timezone} />
+              </div>
+            ) : null}
+          </div>
         ) : (
           <ol className="flex flex-col gap-2">
-            {stageHistory.map((entry) => (
-              <li
-                key={entry.id}
-                className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-sm first:border-t-0 first:pt-0"
-              >
-                <div>
+            {timeline.entries.map((entry) =>
+              entry.kind === "stage_change" ? (
+                <li
+                  key={`stage-${entry.id}`}
+                  className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-sm first:border-t-0 first:pt-0"
+                >
+                  <div>
+                    <p className="text-ink">
+                      <span className="mr-2 rounded-token bg-raised px-1.5 py-0.5 text-xs font-medium text-muted">Stage change</span>
+                      {entry.fromStageName ? `${entry.fromStageName} → ${entry.toStageName}` : entry.toStageName}
+                      {entry.isRegression ? (
+                        <span className="ml-2 rounded-token bg-risk px-1.5 py-0.5 text-xs text-surface">Regression</span>
+                      ) : null}
+                    </p>
+                    <p className="text-xs text-muted">
+                      {entry.actorName ?? "System"} · {formatDateInTimezone(entry.occurredAt, timezone)}
+                      {entry.isReconstructed ? " · reconstructed" : ""}
+                    </p>
+                  </div>
+                  <p className="text-xs text-muted">
+                    {entry.durationInPreviousSeconds === null
+                      ? "—"
+                      : `${formatDurationSeconds(entry.durationInPreviousSeconds)} in previous stage`}
+                  </p>
+                </li>
+              ) : (
+                <li
+                  key={`activity-${entry.id}`}
+                  className="flex flex-col gap-1 border-t border-line pt-2 text-sm first:border-t-0 first:pt-0"
+                >
                   <p className="text-ink">
-                    {entry.fromStageName ? `${entry.fromStageName} → ${entry.toStageName}` : entry.toStageName}
-                    {entry.isRegression ? (
-                      <span className="ml-2 rounded-token bg-risk px-1.5 py-0.5 text-xs text-surface">Regression</span>
-                    ) : null}
+                    <span className="mr-2 rounded-token bg-accent px-1.5 py-0.5 text-xs font-medium text-surface">
+                      {ACTIVITY_TYPE_LABELS[entry.type]}
+                    </span>
+                    {entry.summary}
                   </p>
                   <p className="text-xs text-muted">
-                    {entry.actorName ?? "System"} · {formatDateInTimezone(entry.occurredAt, timezone)}
-                    {entry.isReconstructed ? " · reconstructed" : ""}
+                    {entry.authorName ?? "Unknown"} · {formatPlainDate(entry.activityDate)}
+                    {entry.outcome ? ` · ${entry.outcome}` : ""}
+                    {entry.outcomeDisposition ? ` (${entry.outcomeDisposition.replace("_", " ")})` : ""}
                   </p>
-                </div>
-                <p className="text-xs text-muted">
-                  {entry.durationInPreviousSeconds === null
-                    ? "—"
-                    : `${formatDurationSeconds(entry.durationInPreviousSeconds)} in previous stage`}
-                </p>
-              </li>
-            ))}
+                </li>
+              ),
+            )}
           </ol>
         )}
       </section>

@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
-import { daysBetweenInTimezone } from "@/lib/dates";
+import { dateInTimezone, daysBetweenInTimezone } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import { changeStage, getDealDetail, listPipelineDeals, updateDeal } from "@/services/deals";
 import { getStageHistory } from "@/services/stageEvents";
+import { logActivity } from "@/services/activities";
+import { getEngagementTimeline } from "@/services/engagementTimeline";
 import { findOrCreateByUniqueMatch, findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M1.4/M1.5 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced
@@ -580,6 +582,89 @@ describe("getStageHistory", () => {
     const client = await signIn("m1-4-executive@example.com");
     const history = await getStageHistory(client, ids.searchDealId);
     expect(history).toHaveLength(0);
+  });
+});
+
+// M3.5 (docs/07-build-backlog.md): "Engagement timeline component merging activities and stage
+// events, newest first, with type and author filters." advisoryDealId already carries real
+// accumulated stage_events history from the changeStage tests above; this logs a couple of real
+// activities onto the same deal (via logActivity, the single creation path) and proves the merged,
+// sorted, filtered view - counts are asserted as deltas/"at least", not exact totals, for the same
+// reason as every other real-history assertion in this file: this fixture accumulates across runs.
+describe("getEngagementTimeline", () => {
+  it("merges activities and stage changes into one newest-first stream, with working type/author filters", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const callResult = await logActivity(client, session.actor, "Africa/Lagos", {
+      dealId: ids.advisoryDealId,
+      type: "call",
+      activityDate: dateInTimezone(new Date().toISOString(), "Africa/Lagos"),
+      summary: "M3.5 timeline test call",
+      outcome: null,
+      outcomeDisposition: null,
+    });
+    expect(callResult.ok).toBe(true);
+
+    const noteResult = await logActivity(client, session.actor, "Africa/Lagos", {
+      dealId: ids.advisoryDealId,
+      type: "note",
+      activityDate: dateInTimezone(new Date().toISOString(), "Africa/Lagos"),
+      summary: "M3.5 timeline test note",
+      outcome: null,
+      outcomeDisposition: null,
+    });
+    expect(noteResult.ok).toBe(true);
+    if (!callResult.ok || !noteResult.ok) return;
+
+    const timeline = await getEngagementTimeline(client, ids.advisoryDealId);
+
+    // Both new entries are present, and the whole merged set is newest-first by each entry's own
+    // real date/time - stage_change by occurred_at, activity by activity_date.
+    const callEntry = timeline.entries.find((e) => e.kind === "activity" && e.id === callResult.activity.id);
+    const noteEntry = timeline.entries.find((e) => e.kind === "activity" && e.id === noteResult.activity.id);
+    const stageChangeEntry = timeline.entries.find((e) => e.kind === "stage_change");
+    expect(callEntry).toBeDefined();
+    expect(noteEntry).toBeDefined();
+    expect(stageChangeEntry).toBeDefined();
+
+    for (let i = 0; i + 1 < timeline.entries.length; i++) {
+      const a = timeline.entries[i]!;
+      const b = timeline.entries[i + 1]!;
+      const aInstant = a.kind === "activity" ? `${a.activityDate}T12:00:00.000Z` : a.occurredAt;
+      const bInstant = b.kind === "activity" ? `${b.activityDate}T12:00:00.000Z` : b.occurredAt;
+      expect(new Date(aInstant).getTime()).toBeGreaterThanOrEqual(new Date(bInstant).getTime());
+    }
+
+    expect(timeline.availableAuthors.some((a) => a.name === "Bde Advisory")).toBe(true);
+
+    // Type filter: "stage_change" returns only stage changes, never an activity.
+    const stageOnly = await getEngagementTimeline(client, ids.advisoryDealId, { type: "stage_change" });
+    expect(stageOnly.entries.length).toBeGreaterThan(0);
+    expect(stageOnly.entries.every((e) => e.kind === "stage_change")).toBe(true);
+
+    // Type filter: "note" returns only the note activity just logged, never the call or any stage change.
+    const noteOnly = await getEngagementTimeline(client, ids.advisoryDealId, { type: "note" });
+    expect(noteOnly.entries.some((e) => e.kind === "activity" && e.id === noteResult.activity.id)).toBe(true);
+    expect(noteOnly.entries.every((e) => e.kind === "activity" && e.type === "note")).toBe(true);
+
+    // Author filter: bdeAdvisoryAuthId authored/actioned both the new activities AND (per the
+    // changeStage tests above) at least one stage change - both kinds should come back.
+    const byAuthor = await getEngagementTimeline(client, ids.advisoryDealId, { authorId: ids.bdeAdvisoryAuthId });
+    expect(byAuthor.entries.some((e) => e.kind === "activity")).toBe(true);
+    expect(byAuthor.entries.some((e) => e.kind === "stage_change")).toBe(true);
+    expect(
+      byAuthor.entries.every((e) => (e.kind === "activity" ? e.authorId : e.actorId) === ids.bdeAdvisoryAuthId),
+    ).toBe(true);
+  });
+
+  it("a bde outside the deal's practice sees an empty timeline - not_found reasoning, same RLS scope as the deal itself", async () => {
+    const client = await signIn("m1-4-bde-search@example.com");
+    const timeline = await getEngagementTimeline(client, ids.advisoryDealId);
+    expect(timeline.entries).toHaveLength(0);
+    expect(timeline.availableAuthors).toHaveLength(0);
   });
 });
 

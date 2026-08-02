@@ -47,3 +47,64 @@ export async function insertActivity(supabase: SupabaseClient, input: NewActivit
   const row = data as unknown as { id: string; activity_date: string; is_client_facing: boolean };
   return { id: row.id, activityDate: row.activity_date, isClientFacing: row.is_client_facing };
 }
+
+export interface ActivityListItem {
+  id: string;
+  type: ActivityType;
+  isClientFacing: boolean;
+  activityDate: string;
+  summary: string;
+  outcome: string | null;
+  outcomeDisposition: OutcomeDisposition | null;
+  authorId: string | null;
+  authorName: string | null;
+  retractedAt: string | null;
+  retractionReason: string | null;
+}
+
+interface ActivityListRow {
+  id: string;
+  type: ActivityType;
+  is_client_facing: boolean;
+  activity_date: string;
+  summary: string;
+  outcome: string | null;
+  outcome_disposition: OutcomeDisposition | null;
+  author_id: string | null;
+  retracted_at: string | null;
+  retraction_reason: string | null;
+  author: { full_name: string } | null;
+}
+
+// M3.5 (docs/07-build-backlog.md): "Engagement timeline component merging activities and stage
+// events." This is the activities half - src/services/engagementTimeline.ts merges it with
+// src/data/stageEvents.ts's listStageEventsForDeal. Newest first by activity_date, matching the
+// merged timeline's own ordering. Reads through the caller's own RLS-scoped session, same
+// reasoning as listStageEventsForDeal: activities_select (migration 0008) already scopes rows to
+// the caller's tenant/practice entitlement - there is no separate can() check for viewing.
+export async function listActivitiesForDeal(supabase: SupabaseClient, dealId: string): Promise<ActivityListItem[]> {
+  const { data, error } = await supabase
+    .from("activities")
+    .select(
+      "id, type, is_client_facing, activity_date, summary, outcome, outcome_disposition, author_id, " +
+        "retracted_at, retraction_reason, author:users!author_id(full_name)",
+    )
+    .eq("deal_id", dealId)
+    .order("activity_date", { ascending: false });
+
+  if (error) throw new Error(`listActivitiesForDeal failed: ${error.message}`);
+
+  return (data as unknown as ActivityListRow[]).map((row) => ({
+    id: row.id,
+    type: row.type,
+    isClientFacing: row.is_client_facing,
+    activityDate: row.activity_date,
+    summary: row.summary,
+    outcome: row.outcome,
+    outcomeDisposition: row.outcome_disposition,
+    authorId: row.author_id,
+    authorName: row.author?.full_name ?? null,
+    retractedAt: row.retracted_at,
+    retractionReason: row.retraction_reason,
+  }));
+}

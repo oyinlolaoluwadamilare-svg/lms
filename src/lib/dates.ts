@@ -48,6 +48,17 @@ export function formatDateInTimezone(isoInstant: string, timezone: string): stri
   );
 }
 
+// CLAUDE.md #8's default date display format, DD/MM/YYYY, for a plain DATE value (YYYY-MM-DD, e.g.
+// activities.activity_date) that has no time-of-day or timezone component at all - there is no
+// instant to resolve here, just re-ordering the same three digit groups, so this is deliberately
+// NOT built on formatDateInTimezone/Date/Intl: parsing a bare date string into a Date and
+// re-formatting it risks exactly the off-by-one-day bug this file's other functions exist to
+// prevent, if a caller ever mis-supplied a timezone. Plain string manipulation has no such risk.
+export function formatPlainDate(yyyyMmDd: string): string {
+  const [year, month, day] = yyyyMmDd.split("-");
+  return `${day}/${month}/${year}`;
+}
+
 // A human-readable rendering of a stage_events.duration_in_previous_seconds value - whole days once
 // it's at least one, else whole hours, else whole minutes, else "under a minute". Presentational
 // only (how to phrase a number of seconds), not an analytic metric formula - docs/04-metric-
