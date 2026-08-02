@@ -85,6 +85,17 @@ beforeAll(async () => {
     { tenant_id: ids.tenantId, user_id: ids.executiveAuthId, role: "executive", practice_line_id: null },
   ]);
 
+  // D-03: an account is only visible under accounts_select (migration 0005) via
+  // account_practice_owners, not by tenant/role alone - without this, the deal detail page's
+  // accounts(...) embed (app/(app)/deals/[id]/page.tsx's getDealDetail) silently comes back null
+  // for a bde, even though this spec's own service-layer tests never surfaced that (logActivity
+  // never fetches the account). Found via manual browser QA of M3.4's Log Activity modal against
+  // this exact fixture - fixed here so a future UI check against this tenant doesn't hit it again.
+  await service.from("account_practice_owners").delete().eq("account_id", ids.accountId);
+  await service
+    .from("account_practice_owners")
+    .insert({ account_id: ids.accountId, practice_line_id: ids.practiceLineId, owner_id: ids.bdeAuthId });
+
   ids.dealId = await findOrCreateByUniqueMatch(
     service,
     "deals",

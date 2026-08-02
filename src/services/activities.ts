@@ -85,3 +85,23 @@ export async function logActivity(
 
   return { ok: true, activity };
 }
+
+// For the deal detail page to decide whether to show the "Log Activity" button at all
+// (docs/06-ui-spec.md: "visible to every writing role including BDE" - not executive). Mirrors
+// getDealForEditView's shape (src/services/deals.ts): a separate fetch from getDealDetail, since
+// that function's shape is display-oriented (owner/author/co-owner NAMES, not ids) and can't build
+// a can() Resource on its own. Returns false for a deal that doesn't exist or isn't visible to this
+// actor, the same not-distinguishing-not_found-from-denied a hidden button doesn't need to explain.
+export async function canLogActivity(supabase: SupabaseClient, actor: Actor, dealId: string): Promise<boolean> {
+  const deal = await getDealForAuthorization(supabase, dealId);
+  if (!deal) return false;
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  return can(actor, "activity.create", {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  });
+}

@@ -12,7 +12,7 @@ Start here, in order:
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
    **M2 — Engagement history is complete** (staleness colour, M2.3's other half, is deliberately
    deferred to M3.7 — see the `## M2` section below). Current milestone: **M3 — Engagement
-   timeline** ⚑, through task M3.3 — see the `## M3` section below.
+   timeline** ⚑, through task M3.4 — see the `## M3` section below.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -670,6 +670,54 @@ Verified: typecheck, lint, unit (167, unchanged - no application code touched), 
 total, the 14 new above alongside every existing suite, including the exact named regression
 string). Integration and e2e suites are unaffected (no application, service, data, or migration
 code changed this task) and were not re-run beyond the previous task's already-green results.
+
+**M3.4** adds the **Log Activity modal** - the first real UI this milestone, meeting
+`docs/06-ui-spec.md`'s "three-interaction constraint" literally: click Log Activity (opens the
+modal, autofocuses Summary, Type/Activity date already defaulted), type the summary, Ctrl+Enter
+saves. Fields in the spec's own order - Type as a segmented control (not a dropdown), Activity date
+(defaults to today **in the actor's own resolved timezone**, future dates disabled inline with the
+spec's exact copy, "future intent is a task, not an engagement"), Summary (the only mandatory
+field), then a collapsed-by-default Outcome/Disposition section.
+
+Two fields the spec names are deliberately not built: "contacts present" and "attachments" (`M5.5`/
+`M3.8`, neither exists yet), and the secondary "Save and add task" button (`M4`'s Add Task modal
+doesn't exist yet). Building any of these now would be a control with nothing real behind it - the
+same reasoning every narrower-than-spec vertical slice this session has taken.
+
+One UX detail the docs don't specify and this component had to decide: the keyboard shortcut key.
+"L" (mnemonic for "Log") is this component's own choice, flagged in its own comment rather than
+presented as if the spec named it. It only fires when the modal is closed and focus isn't already
+in a text input, so it never hijacks normal typing elsewhere on the page.
+
+New `src/services/activities.ts`'s `canLogActivity` mirrors `getDealForEditView`'s shape (a separate
+fetch from `getDealDetail`, whose fields are display-oriented names, not the raw ids a `can()`
+check needs) - it's what the page uses to decide whether to render the button at all
+(`docs/06-ui-spec.md`: "visible to every writing role including BDE" - not executive).
+
+Manual browser QA (this container's Playwright has no service-role credentials to seed a populated
+deal, the same limitation already documented for M1.6/M1.7/M2.3/M2.4) against a real fixture tenant
+confirmed: the button opens the modal with Summary autofocused; Ctrl+Enter and the "L" shortcut both
+work; a future date disables Save with the exact inline copy; an executive never sees the button at
+all; and the logged activities persisted correctly for real, verified directly against the database
+(`is_client_facing` correct per type, `last_engaged_at`/`engagement_count` updated via migration
+0009's trigger). That QA pass surfaced one real, pre-existing gap in
+`tests/integration/log-activity.spec.ts`'s own fixture (not new to M3.4): it never inserted an
+`account_practice_owners` row, so `getDealDetail`'s `accounts(...)` embed silently came back null
+for a bde on the actual deal detail page - invisible to that spec's own tests, which only call
+`logActivity` directly and never render the page. Fixed in the fixture, not worked around.
+
+Also worth recording: this QA pass surfaced several stale `next-server` processes left running in
+this container from earlier manual-QA sessions in this same conversation (`pkill` had not reliably
+terminated them). Multiple builds bound to the same port simultaneously produced exactly the kind of
+intermittent "client-side exception" hydration mismatch a real code defect would - two consecutive
+full e2e suite runs failed at different, unrelated tests each time. Diagnosed by `pgrep`-listing
+every `next-server` process, force-killing all of them, and confirming the e2e suite passes
+consistently on a clean server - a process-hygiene artifact of this session, not a regression, but
+recorded here since it looked exactly like one until traced down.
+
+Verified: typecheck, lint, unit (167, unchanged), RLS (160, unchanged), integration (39 total, the
+fixture fix above), and the full Playwright e2e suite (11) all green - confirmed clean after
+resolving the stale-server artifact.
 
 ## Commands
 

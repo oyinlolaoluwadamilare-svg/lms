@@ -3,11 +3,13 @@ import { formatMoney } from "@/domain/money";
 import { formatDateInTimezone, formatDurationSeconds } from "@/lib/dates";
 import { getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
+import { canLogActivity } from "@/services/activities";
 import { getStageHistory } from "@/services/stageEvents";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
+import { LogActivityModal } from "./LogActivityModal";
 
 const STAGE_TYPE_LABEL: Record<string, string> = { open: "Open", won: "Won", lost: "Lost" };
 
@@ -26,10 +28,11 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
   // reads through the same session (stage_events_select, migration 0007) - if the deal itself is
   // invisible to this actor, this comes back empty rather than erroring, which the early return
   // below makes moot anyway.
-  const [deal, editView, stageHistory] = await Promise.all([
+  const [deal, editView, stageHistory, canLog] = await Promise.all([
     getDealDetail(supabase, id),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
     getStageHistory(supabase, id),
+    session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
   ]);
 
   if (!deal) {
@@ -45,28 +48,32 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
             <span className="rounded-token bg-surface px-2 py-0.5 text-xs font-medium text-muted">{deal.reference}</span>
             <span className="rounded-token bg-accent px-2 py-0.5 text-xs font-medium text-surface">{deal.stage.name}</span>
           </div>
-          {editView?.canEdit ? (
-            <Link
-              href={`/deals/${deal.id}/edit`}
-              prefetch={false}
-              className="rounded-token border border-line px-3 py-1.5 text-sm font-medium text-ink outline-none hover:bg-surface focus-visible:ring-2 focus-visible:ring-accent"
-            >
-              Edit deal
-            </Link>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {canLog ? <LogActivityModal dealId={deal.id} timezone={timezone} /> : null}
+            {editView?.canEdit ? (
+              <Link
+                href={`/deals/${deal.id}/edit`}
+                prefetch={false}
+                className="rounded-token border border-line px-3 py-1.5 text-sm font-medium text-ink outline-none hover:bg-surface focus-visible:ring-2 focus-visible:ring-accent"
+              >
+                Edit deal
+              </Link>
+            ) : null}
+          </div>
         </div>
         <p className="text-sm text-muted">{deal.account.name}</p>
       </header>
 
-      {/* Deliberately no next-action strip, last-engaged chip, most primary action buttons (Log
-          Activity, Add Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), stakeholders or
-          open tasks here - docs/06-ui-spec.md's full Deal detail spec includes all of these, but
-          every one depends on an entity or action that doesn't exist yet (activities: M3+; tasks:
-          M4+; mark won/lost: M5.2-M5.3). Edit Deal above is the one action that now exists (M1.7);
+      {/* Deliberately no next-action strip, last-engaged chip, most primary action buttons (Add
+          Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), stakeholders or open tasks
+          here - docs/06-ui-spec.md's full Deal detail spec includes all of these, but every one
+          depends on an entity or action that doesn't exist yet (tasks: M4+; mark won/lost:
+          M5.2-M5.3). Log Activity (M3.4) and Edit Deal (M1.7) are the two actions that now exist;
           the stage-history panel below is M2.4's narrower, stage_events-only precursor to the full
-          "Engagement timeline" the spec describes (which merges activities and stage events -
-          M3.5, blocked on activities existing). Otherwise this is the same read-only skeleton
-          docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
+          "Engagement timeline" the spec describes (M3.5, which will also surface the activities
+          this modal now writes - there is nowhere on this page to see them yet). Otherwise this is
+          the same read-only skeleton docs/07-build-backlog.md M1.6 asked for: header, financial
+          summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">

@@ -1,0 +1,273 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { ACTIVITY_TYPES, OUTCOME_DISPOSITIONS, type ActivityType, type OutcomeDisposition } from "@/domain/activity";
+import { dateInTimezone } from "@/lib/dates";
+import { logActivityAction } from "./logActivityActions";
+
+const TYPE_LABELS: Record<ActivityType, string> = {
+  note: "Note",
+  call: "Call",
+  email: "Email",
+  meeting: "Meeting",
+  follow_up: "Follow-up",
+  site_visit: "Site visit",
+  proposal_walkthrough: "Proposal walkthrough",
+  internal_review: "Internal review",
+};
+
+const DISPOSITION_LABELS: Record<OutcomeDisposition, string> = {
+  positive: "Positive",
+  neutral: "Neutral",
+  negative: "Negative",
+  no_response: "No response",
+};
+
+const DEFAULT_TYPE: ActivityType = "call";
+
+// docs/06-ui-spec.md: "Log Activity modal - the three-interaction constraint... Reachable by one
+// click from the deal page, and by keyboard shortcut... Path to a saved activity: open modal, type
+// summary, save. Three interactions." No specific key is named in the docs for the shortcut - "l"
+// (mnemonic for "Log") is this component's own choice, flagged here rather than silently invented
+// as if it were specified. Only fires when the modal is closed and focus isn't already in a text
+// input, so it never hijacks normal typing elsewhere on the page.
+//
+// Deliberately missing, per docs/06-ui-spec.md's own field list, but not buildable yet: the
+// "contacts present"/"attachments" optional fields (contacts don't exist until M5.5; attachments
+// are M3.8) and the secondary "Save and add task" button (Add Task modal is M4). Building either
+// now would show a control with nothing real behind it - the same reasoning every other narrower-
+// than-spec vertical slice this session has taken.
+export function LogActivityModal({ dealId, timezone }: { dealId: string; timezone: string }) {
+  const router = useRouter();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const summaryRef = useRef<HTMLTextAreaElement>(null);
+
+  const [type, setType] = useState<ActivityType>(DEFAULT_TYPE);
+  const [activityDate, setActivityDate] = useState("");
+  const [summary, setSummary] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [outcomeDisposition, setOutcomeDisposition] = useState<OutcomeDisposition | "">("");
+  const [showOptional, setShowOptional] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function today(): string {
+    return dateInTimezone(new Date().toISOString(), timezone);
+  }
+
+  function openModal() {
+    setType(DEFAULT_TYPE);
+    setActivityDate(today());
+    setSummary("");
+    setOutcome("");
+    setOutcomeDisposition("");
+    setShowOptional(false);
+    setError(null);
+    dialogRef.current?.showModal();
+    // Autofocus the summary field (docs/06-ui-spec.md) - queued after the dialog paints so the
+    // browser's own native dialog-open focus handling doesn't immediately steal it back.
+    requestAnimationFrame(() => summaryRef.current?.focus());
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (dialogRef.current?.open) return;
+      const target = e.target as HTMLElement | null;
+      const isTyping = target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+      if (isTyping || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key.toLowerCase() === "l") {
+        e.preventDefault();
+        openModal();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handleSave() {
+    if (pending) return;
+    if (summary.trim().length === 0) {
+      setError("Summary is required");
+      summaryRef.current?.focus();
+      return;
+    }
+    setPending(true);
+    setError(null);
+
+    const result = await logActivityAction(dealId, {
+      type,
+      activityDate,
+      summary,
+      outcome,
+      outcomeDisposition,
+    });
+
+    setPending(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    dialogRef.current?.close();
+    router.refresh();
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      e.preventDefault();
+      void handleSave();
+    }
+    if (e.key === "Escape") {
+      dialogRef.current?.close();
+    }
+  }
+
+  const isFutureDate = activityDate > today();
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={openModal}
+        className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Log Activity
+      </button>
+
+      <dialog
+        ref={dialogRef}
+        onKeyDown={handleKeyDown}
+        className="w-full max-w-lg rounded-token border border-line bg-surface p-0 text-ink backdrop:bg-ink/40"
+      >
+        <form
+          method="dialog"
+          onSubmit={(e) => e.preventDefault()}
+          className="flex flex-col gap-4 p-6"
+        >
+          <h2 className="text-sm font-semibold text-ink">Log Activity</h2>
+
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="text-sm font-medium text-ink">Type</legend>
+            <div className="flex flex-wrap gap-1.5">
+              {ACTIVITY_TYPES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setType(t)}
+                  aria-pressed={type === t}
+                  className={`rounded-token border px-2.5 py-1 text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+                    type === t ? "border-accent bg-accent text-surface" : "border-line bg-raised text-ink"
+                  }`}
+                >
+                  {TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="activityDate" className="text-sm font-medium text-ink">
+              Activity date
+            </label>
+            <input
+              id="activityDate"
+              type="date"
+              value={activityDate}
+              max={today()}
+              onChange={(e) => setActivityDate(e.target.value)}
+              className="rounded-token border border-line bg-surface px-3 py-2 text-ink outline-none focus:ring-2 focus:ring-accent"
+            />
+            {isFutureDate ? (
+              <p role="alert" className="text-xs text-lost">
+                future intent is a task, not an engagement
+              </p>
+            ) : null}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="summary" className="text-sm font-medium text-ink">
+              Summary
+            </label>
+            <textarea
+              id="summary"
+              ref={summaryRef}
+              required
+              rows={3}
+              value={summary}
+              onChange={(e) => setSummary(e.target.value)}
+              className="rounded-token border border-line bg-surface px-3 py-2 text-ink outline-none focus:ring-2 focus:ring-accent"
+            />
+          </div>
+
+          {showOptional ? (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="outcome" className="text-sm font-medium text-ink">
+                  Outcome (optional)
+                </label>
+                <input
+                  id="outcome"
+                  type="text"
+                  value={outcome}
+                  onChange={(e) => setOutcome(e.target.value)}
+                  className="rounded-token border border-line bg-surface px-3 py-2 text-ink outline-none focus:ring-2 focus:ring-accent"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor="outcomeDisposition" className="text-sm font-medium text-ink">
+                  Disposition (optional)
+                </label>
+                <select
+                  id="outcomeDisposition"
+                  value={outcomeDisposition}
+                  onChange={(e) => setOutcomeDisposition(e.target.value as OutcomeDisposition | "")}
+                  className="rounded-token border border-line bg-surface px-3 py-2 text-ink outline-none focus:ring-2 focus:ring-accent"
+                >
+                  <option value="">—</option>
+                  {OUTCOME_DISPOSITIONS.map((d) => (
+                    <option key={d} value={d}>
+                      {DISPOSITION_LABELS[d]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowOptional(true)}
+              className="self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
+            >
+              Add outcome and disposition
+            </button>
+          )}
+
+          {error ? (
+            <p role="alert" aria-live="polite" className="text-sm text-lost">
+              {error}
+            </p>
+          ) : null}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={pending || isFutureDate}
+              className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
+            >
+              {pending ? "Saving…" : "Save activity"}
+            </button>
+            <button
+              type="button"
+              onClick={() => dialogRef.current?.close()}
+              className="rounded-token border border-line px-4 py-2 text-sm font-medium text-ink outline-none hover:bg-raised focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      </dialog>
+    </>
+  );
+}
