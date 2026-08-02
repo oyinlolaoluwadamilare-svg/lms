@@ -11,7 +11,7 @@ import {
   listMyWorkTasks,
   type TaskQueueItem,
 } from "@/data/tasks";
-import { insertNotification } from "@/data/notifications";
+import { sendNotification } from "@/services/notifications";
 import {
   getUserByAuthId,
   listAssignableUsersForPractice,
@@ -92,7 +92,7 @@ export async function assignTask(supabase: SupabaseClient, actor: Actor, taskId:
   const serviceClient = createServiceClient();
   await insertTaskAssignment(serviceClient, taskId, previousAssigneeId, newAssigneeId, actor.id);
 
-  await insertNotification(serviceClient, {
+  await sendNotification(serviceClient, {
     tenantId: task.tenantId,
     recipientId: newAssigneeId,
     actorId: actor.id,
@@ -206,7 +206,7 @@ export async function createTask(supabase: SupabaseClient, actor: Actor, input: 
   // self-assigned task deliberately sends no notification, the same reasoning that copy implies:
   // you don't need to be told you assigned yourself something.
   if (!isSelfAssign) {
-    await insertNotification(serviceClient, {
+    await sendNotification(serviceClient, {
       tenantId: actor.tenantId,
       recipientId: input.assigneeId,
       actorId: actor.id,

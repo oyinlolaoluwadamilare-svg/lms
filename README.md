@@ -1506,6 +1506,60 @@ the checkbox correctly pre-checked from the URL and the table correctly narrowed
 Verified: typecheck, lint, unit (220, 1 new), RLS (220, unchanged), integration (111, 5 new), and
 the full Playwright e2e suite (11, unchanged) all green.
 
+**M4.8** (notification events for assigned, reassigned, overdue and mentioned, with per-type user
+preferences replacing coarse toggles) is implemented and verified, including a new migration
+(`0014_notification_preferences`) applied to the real hosted project. Full reasoning lives in
+`db/migrations/README.md`'s own `0014` entry and this migration's own header comment; summarized
+here:
+
+Three decisions had no doc to point to and were made by explicit user choice rather than guessed
+(asked via `AskUserQuestion` before writing any code, since CLAUDE.md says to stop and ask rather
+than silently assume on business rules this size): `task_overdue` fires **once** per task, not a
+repeating daily nag; the overdue sweep runs on a **real `pg_cron` schedule** (every 15 minutes - a
+judgment call, not documented) rather than staying callable-only; and **`mentioned`** is added to
+the preference set now, even though nothing can actually fire it until M4.9 wires up comment
+creation (`task_comments` has zero service-layer code today).
+
+`sendNotification` (new `src/services/notifications.ts`) is the single gate every notification-
+writing call site now goes through - `createTask`/`assignTask`'s existing `task_assigned`/
+`task_reassigned` writes were rewired to it, both confirmed unaffected by the new default-on
+behaviour (their own pre-existing integration tests still pass unchanged). `sweep_overdue_tasks()`
+is a single atomic SQL function, the first background job in this codebase, deliberately without a
+separate job-tracking table - `notifications`' own `(entity_id, event_type)` pair, backed by a new
+partial unique index, is idempotency enough for a job this simple (CLAUDE.md #6: no premature
+abstraction). Its status filter excludes `'blocked'` tasks, matching migration 0011's own pre-built
+`tasks_overdue` index exactly - a disclosed, deliberate divergence from `taskQueueGroup`'s own
+"Overdue" UI bucket, which has no such carve-out.
+
+This session hit two infrastructure firsts worth recording: this sandbox has no raw-TCP egress to
+the hosted project's Postgres, so applying the migration required a Supabase Management API
+Personal Access Token, supplied by the user mid-session (the same mechanism migrations `0006`-`0013`
+used before it). And building this migration surfaced a genuine, disclosed gap in the **local** test
+harness - `authenticated`'s privileges on every table through `0013` came from an undocumented,
+one-off manual `GRANT`, not from any versioned migration or default-privileges rule, and didn't
+match the real hosted project's own default grants (verified directly). Fixed at the source
+(`scripts/db-bootstrap-local.sh` now sets `alter default privileges for role app_migrator`) rather
+than worked around per-table; one consequence flagged rather than silently diverged from -
+`tests/rls/notificationPreferences.spec.ts`'s own "no hard-delete" test asserts 0 rows affected
+(matching real Supabase's actual RLS-does-the-blocking model), while the older
+`tests/rls/notifications.spec.ts` test it mirrors asserts a thrown permission error (an artifact of
+that table's own local-only under-grant) - not "fixed" there, out of scope for this migration, but
+called out in both files rather than left for a future session to rediscover.
+
+A personal "Notification preferences" screen (`/notifications/preferences`) was built alongside the
+gate - not role-gated (every user manages their own), reachable from a new link in `AppShell`'s
+persistent footer rather than any role's own `Nav`. Manual browser QA (real dev server, real hosted
+project) confirmed a toggle takes effect immediately and survives a hard reload.
+
+New `tests/rls/notificationPreferences.spec.ts` (10 tests, local Postgres) and
+`tests/integration/notification-preferences.spec.ts` (8 tests, real hosted project - the preference
+gate's opt-out/opt-back-in behaviour through real `createTask`/`assignTask` calls, and
+`sweep_overdue_tasks()` called via RPC exactly as `pg_cron` invokes it in production, proving it
+fires once, respects the per-user opt-out, and never double-fires on a repeat sweep).
+
+Verified: typecheck, lint, unit (220, unchanged), RLS (230, 10 new), integration (119, 8 new), and
+the full Playwright e2e suite (11, unchanged) all green.
+
 ## Commands
 
 ```

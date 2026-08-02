@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import type { NavItem } from "@/domain/navigation";
 import { Nav } from "@/ui/nav/Nav";
 
@@ -27,7 +28,19 @@ export function AppShell({
           <Nav items={navItems} />
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-line p-4">
-          <p className="truncate text-xs text-muted">{userName}</p>
+          <div className="flex min-w-0 flex-col gap-1">
+            <p className="truncate text-xs text-muted">{userName}</p>
+            {/* Notification preferences (M4.8) is a personal setting, not a role-gated screen - it
+                lives here rather than in the role-specific Nav so every role, regardless of what
+                else appears in their own sidebar, can always reach it. */}
+            <Link
+              href="/notifications/preferences"
+              prefetch={false}
+              className="truncate text-xs font-medium text-accent outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Notification preferences
+            </Link>
+          </div>
           <form action="/sign-out" method="post">
             <button
               type="submit"

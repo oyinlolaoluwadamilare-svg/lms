@@ -137,3 +137,56 @@ that clears both columns when no open task remains - `tests/integration/next-act
 5 tests, against the real hosted project, run twice consecutively) exercises exactly this sequence
 through the real `createTask` service and `getDealDetail`'s own `nextAction` field, with its final
 test asserting the previously-stale case specifically.
+
+`0014_notification_preferences` was applied to the hosted project the same way - forward/backward-
+tested locally first, then applied for real; `schema_migrations` there now lists `0001` through
+`0014`. Adds `notification_preferences` (per-user, per-event-type, default-on when no row exists)
+and `sweep_overdue_tasks()`, the first background job in this codebase, scheduled via `pg_cron`
+(`CLAUDE.md`'s stated "Supabase cron plus a job table" architecture) rather than a bespoke job-queue
+table - the notifications table's own `(entity_id, event_type)` pair already is the idempotency
+ledger this job needs (backed by a partial unique index, `notifications_task_overdue_once`), and the
+sweep is one atomic `insert ... select ...` statement, not a multi-step process that could fail
+partway. Three decisions with no doc to point to were made by explicit user choice rather than
+guessed: `task_overdue` fires once per task (not a repeating daily nag); the sweep runs on a real
+`pg_cron` schedule (every 15 minutes, a judgment call) rather than staying a callable-only function
+with scheduling deferred; and `mentioned` is added to the preference set now, even though nothing
+can fire it until M4.9 wires up comment creation. The sweep's own status filter is `('open',
+'in_progress')`, deliberately excluding `'blocked'` - matching migration 0011's own pre-built
+`tasks_overdue` partial index exactly; `src/domain/task.ts`'s `taskQueueGroup` has no such carve-out
+(a blocked, past-due task still visually sits in My Work's "Overdue" bucket), a disclosed, deliberate
+divergence between that UI grouping and this proactive notification, not a bug.
+
+This sandbox has no raw-TCP egress to the hosted project's Postgres instance (same constraint
+`0006`/`0007` first hit) - this migration was applied via the Supabase Management API's SQL query
+endpoint instead, using a Personal Access Token supplied ad hoc in chat, the same mechanism used for
+every migration through `0013`.
+
+A genuine, disclosed local-test-harness gap was found and fixed while building this migration, not
+papered over: local Postgres's `authenticated` role privileges on every table through `0013` came
+from a manual, undocumented, one-off `GRANT` issued at some point in this repo's history - never
+from the versioned migrations themselves (confirmed: zero `GRANT` statements exist anywhere in
+`db/migrations/`), and never from a default-privileges rule scoped to the role migrations actually
+run as locally (`app_migrator`). The real hosted project needs no such thing - `authenticated`
+already carries full table/function privileges by default there, verified directly via
+`information_schema.role_table_grants`, with RLS alone doing the restricting - so this table simply
+never inherited any grant at all until `scripts/db-bootstrap-local.sh` was fixed to run `alter
+default privileges for role app_migrator ... grant ... to authenticated` (mirroring real Supabase's
+own behaviour, for every future table, not just this one) and the same grant was applied
+retroactively to this migration's own already-created table/function. One consequence worth
+flagging: `tests/rls/notifications.spec.ts`'s own "no hard-delete" test asserts a thrown `/permission
+denied/` error, which only holds because `notifications`' own local grant happens to omit `DELETE`
+entirely - not a faithful mirror of the real project (which does grant `DELETE`, relying purely on
+RLS to reduce it to zero affected rows). `tests/rls/notificationPreferences.spec.ts`'s own equivalent
+test asserts the latter, correct behaviour instead; the older test was not "fixed" to match, since
+that was out of scope for this migration, but the divergence is called out in both files' own
+comments rather than silently left for a future session to rediscover.
+
+`tests/rls/notificationPreferences.spec.ts` (10 tests, against local Postgres) covers the RLS shape
+directly; `tests/integration/notification-preferences.spec.ts` (8 tests, against the real hosted
+project) proves the preference gate (`src/services/notifications.ts`'s `sendNotification`) actually
+suppresses and resumes a notification through the real `createTask`/`assignTask` services, and calls
+`sweep_overdue_tasks()` via RPC exactly as `pg_cron` invokes it in production - confirming it fires
+once, respects the per-user opt-out, and never double-fires on a repeat sweep. `createTask`'s and
+`assignTask`'s own pre-existing integration tests were re-run and confirmed unaffected, proving the
+new gate's default-on behaviour doesn't disturb either notification path when no preference row
+exists.
