@@ -74,3 +74,28 @@ export function formatDealReference(sequenceNumber: number): string {
 export function isOpenStage(stageType: StageType): boolean {
   return stageType === "open";
 }
+
+// docs/04-metric-definitions.md's "Staleness bands": "0-7 days green, 8-21 blue, 22-45 amber, 46 or
+// more red." (Thresholds are documented as tenant-configurable; these are the defaults, and nothing
+// in this codebase reads a per-tenant override yet - flagged as a known gap, not silently assumed
+// to be the only behaviour this will ever need.) "never" is a distinct fifth state for a deal with
+// no client-facing activity yet, not folded into the 46+ band - the same doc: "Null last-engaged
+// means never engaged... is displayed explicitly as 'never' and is not treated as zero."
+export type StalenessBand = "fresh" | "ok" | "warn" | "cold" | "never";
+
+export function stalenessBand(daysSinceLastEngagement: number | null): StalenessBand {
+  if (daysSinceLastEngagement === null) return "never";
+  if (daysSinceLastEngagement <= 7) return "fresh";
+  if (daysSinceLastEngagement <= 21) return "ok";
+  if (daysSinceLastEngagement <= 45) return "warn";
+  return "cold";
+}
+
+// docs/06-ui-spec.md's deal header chip: "Last engaged 12 days ago" ... "or 'Never engaged' in
+// red." The day-0 case ("Last engaged today") is a small extrapolation beyond that one example,
+// flagged here rather than silently invented as if it were specified.
+export function formatLastEngaged(daysSinceLastEngagement: number | null): string {
+  if (daysSinceLastEngagement === null) return "Never engaged";
+  if (daysSinceLastEngagement === 0) return "Last engaged today";
+  return `Last engaged ${daysSinceLastEngagement} ${daysSinceLastEngagement === 1 ? "day" : "days"} ago`;
+}

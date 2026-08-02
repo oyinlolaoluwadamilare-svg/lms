@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { daysBetweenInTimezone } from "@/lib/dates";
+import { daysBetweenInTimezone, daysSincePlainDate, dateInTimezone, subtractDaysFromPlainDate } from "@/lib/dates";
 import { getLatestStageEventOccurredAtByDeal } from "@/data/stageEvents";
 import { parseMoneyMinor, type Money } from "@/domain/money";
 import {
@@ -158,16 +158,14 @@ export async function insertDeal(supabase: SupabaseClient, input: NewDealInput):
   return data as InsertedDeal;
 }
 
-// docs/06-ui-spec.md's Pipeline screen names an "advanced filter set" that also includes "days
-// since last engagement", "has no next step" and "stage regression" - each backed by an entity or
-// column this repository cannot honestly serve yet. `last_engaged_at`/`next_action_due_date` exist
-// on the deals table already (migration 0005) but nothing populates them until an activity/task
-// entity exists to derive them from (M2+ per docs/07-build-backlog.md); "stage regression" depends
-// on M2.1's not-yet-built stage_events table and its regression-derived column. Filtering or
-// sorting on a column that is null for every row today would look like a real feature while
-// silently doing nothing - so this is scoped to the filters the current schema can actually answer,
-// per CLAUDE.md's "do not start a milestone whose predecessor is incomplete" and "say when
-// something is a bad idea" rather than building against data that doesn't exist yet.
+// docs/06-ui-spec.md's Pipeline screen names an "advanced filter set" that also includes "has no
+// next step" and "stage regression" - each still backed by an entity or column this repository
+// cannot honestly serve yet ("has no next step": tasks, M4+; "stage regression": a filter on
+// stage_events.is_regression, which exists since M2.1 but has no UI surface yet - a separate gap
+// from this one, not fixed here). "Days since last engagement" is no longer in that deferred list:
+// M3.7 populates and reads last_engaged_at for real. Filtering or sorting on a column that is null
+// for every row would look like a real feature while silently doing nothing - so the remaining two
+// are still scoped out, per CLAUDE.md's "do not start a milestone whose predecessor is incomplete."
 export interface DealListFilters {
   stageId?: string;
   ownerId?: string;
@@ -178,6 +176,17 @@ export interface DealListFilters {
   status?: DealStatus;
   expectedCloseFrom?: string; // YYYY-MM-DD, inclusive
   expectedCloseTo?: string; // YYYY-MM-DD, inclusive
+  // "At least this many days since last engagement, or never engaged" (docs/06-ui-spec.md's
+  // advanced filter set) - never-engaged deals are the most stale a deal can be, so they always
+  // match a minimum-days filter, the same "null means never, not zero, but IS at least as stale as
+  // any number" reasoning docs/04-metric-definitions.md's staleness bands definition already uses.
+  minDaysSinceEngagement?: number;
+  // M3.7: the first sort control in the app (docs/06-ui-spec.md: "a last-engaged column and sort in
+  // the table"). Scoped to this one column deliberately - there is no existing sort infrastructure
+  // to extend, and no other column has been asked for yet; omitted, the table keeps its original
+  // default order (expected_close_date ascending) unchanged.
+  sortBy?: "lastEngagedAt";
+  sortDir?: "asc" | "desc";
 }
 
 export interface DealListRow {
@@ -195,6 +204,8 @@ export interface DealListRow {
   value: Money | null;
   weightedValue: Money | null;
   daysInCurrentStage: number;
+  lastEngagedAt: string | null;
+  daysSinceLastEngagement: number | null;
 }
 
 interface DealListRowRaw {
@@ -210,23 +221,21 @@ interface DealListRowRaw {
   currency_code: string;
   probability_override: number | null;
   created_at: string;
+  last_engaged_at: string | null;
   accounts: { name: string } | null;
   practice_lines: { name: string } | null;
   pipeline_stages: { id: string; name: string; sort_order: number; probability_threshold: number; stage_type: StageType } | null;
   owner: { full_name: string } | null;
 }
 
-// M2.3 (docs/07-build-backlog.md): "Days-in-current-stage derived from the latest event." Scoped
-// to that half of the task only - "staleness colour" is, per docs/04-metric-definitions.md's own
-// "Staleness bands" definition, strictly about days-since-last-engagement (deals.last_engaged_at),
-// an M3 concept that doesn't exist yet (nothing populates last_engaged_at until the activities
-// entity does). Implementing a colour band against a column that's null for every deal today would
-// repeat the exact premature-feature mistake M1.4's own filter set already avoided once - so
-// staleness colour is deferred to M3.7, where the docs already define it correctly, and this
-// function surfaces the one derived value M2.1's stage_events genuinely supports today: how long a
-// deal has sat in its current stage. `timezone` and `now` are the viewer's resolved timezone
+// M2.3/M3.7 (docs/07-build-backlog.md). `timezone` and `now` are the viewer's resolved timezone
 // (src/services/actor.ts) and the current instant - CLAUDE.md #8: rendered in the user's timezone,
 // never computed as a raw UTC day count (see src/lib/dates.ts's own comment for why that's wrong).
+// `daysInCurrentStage` (M2.3) is a TIMESTAMPTZ-vs-instant calculation (daysBetweenInTimezone);
+// `daysSinceLastEngagement` (M3.7) is a plain-DATE-vs-plain-DATE calculation
+// (daysSincePlainDate) - deliberately different helpers for the two, per src/lib/dates.ts's own
+// reasoning about why a DATE column must never be routed through timezone-resolving Intl/Date
+// machinery built for TIMESTAMPTZ columns.
 //
 // RLS's deals_select policy (migration 0005) already scopes rows to the caller's tenant and
 // practice entitlement (or tenant-wide for executive/tenant_admin) - every filter here narrows
@@ -237,12 +246,14 @@ export async function listDeals(
   timezone: string,
   now: Date = new Date(),
 ): Promise<DealListRow[]> {
+  const today = dateInTimezone(now.toISOString(), timezone);
+
   let query = supabase
     .from("deals")
     .select(
       "id, reference, name, client_type, status, forecast_category, expected_close_date, " +
         "proposal_value_minor::text, negotiated_value_minor::text, currency_code, probability_override, created_at, " +
-        "accounts(name), practice_lines(name), " +
+        "last_engaged_at, accounts(name), practice_lines(name), " +
         "pipeline_stages(id, name, sort_order, probability_threshold, stage_type), " +
         "owner:users!owner_id(full_name)",
     )
@@ -257,8 +268,23 @@ export async function listDeals(
   if (filters.status) query = query.eq("status", filters.status);
   if (filters.expectedCloseFrom) query = query.gte("expected_close_date", filters.expectedCloseFrom);
   if (filters.expectedCloseTo) query = query.lte("expected_close_date", filters.expectedCloseTo);
+  if (filters.minDaysSinceEngagement !== undefined) {
+    const cutoff = subtractDaysFromPlainDate(today, filters.minDaysSinceEngagement);
+    query = query.or(`last_engaged_at.lte.${cutoff},last_engaged_at.is.null`);
+  }
 
-  const { data, error } = await query.order("expected_close_date", { ascending: true, nullsFirst: false });
+  // Default order is unchanged from M1.4 when no sort is requested. M3.7's "last-engaged... sort"
+  // (docs/06-ui-spec.md) is the only sortable column so far - ascending means most-stale-first
+  // (never-engaged deals sort first, alongside the oldest real dates: both are "as stale as
+  // possible"), descending means most-recently-engaged-first (never-engaged sort last).
+  if (filters.sortBy === "lastEngagedAt") {
+    const ascending = filters.sortDir !== "desc";
+    query = query.order("last_engaged_at", { ascending, nullsFirst: ascending });
+  } else {
+    query = query.order("expected_close_date", { ascending: true, nullsFirst: false });
+  }
+
+  const { data, error } = await query;
   if (error) throw new Error(`listDeals failed: ${error.message}`);
 
   const rows = data as unknown as DealListRowRaw[];
@@ -312,6 +338,8 @@ export async function listDeals(
       value: dealValue(dealForCalc),
       weightedValue: weightedValue(dealForCalc, stageForCalc),
       daysInCurrentStage: daysBetweenInTimezone(sinceIso, nowIso, timezone),
+      lastEngagedAt: row.last_engaged_at,
+      daysSinceLastEngagement: row.last_engaged_at === null ? null : daysSincePlainDate(row.last_engaged_at, today),
     };
   });
 }
@@ -368,12 +396,11 @@ export async function updateDealStage(supabase: SupabaseClient, dealId: string, 
 }
 
 // M1.6 exit criteria (docs/07-build-backlog.md): "Deal detail read-only skeleton: header, financial
-// summary, details, account." Deliberately narrower than docs/06-ui-spec.md's full Deal detail
-// spec: the engagement timeline, stakeholders, open tasks, next-action strip and last-engaged chip
-// all depend on entities/columns that don't exist yet (activities: M3+; tasks: M4+; last_engaged_at
-// exists on the table already but nothing populates it until an activity entity does) - building
-// against those now would show fake functionality for every deal, the same reasoning M1.4 already
-// applied to its filter set.
+// summary, details, account." Narrower than docs/06-ui-spec.md's full Deal detail spec in two ways
+// that remain: stakeholders and open tasks both depend on entities that don't exist yet (M4+/M5+).
+// The engagement timeline (M3.5) and last-engaged chip (M3.7) have since been added - this shape now
+// carries `lastEngagedAt`/`daysSinceLastEngagement` for that chip, the same derived-field reasoning
+// listDeals' own M3.7 fields already establish.
 export interface DealDetail {
   id: string;
   reference: string;
@@ -397,6 +424,8 @@ export interface DealDetail {
   coOwnerNames: string[];
   createdAt: string;
   updatedAt: string;
+  lastEngagedAt: string | null;
+  daysSinceLastEngagement: number | null;
 }
 
 interface DealDetailRow {
@@ -415,6 +444,7 @@ interface DealDetailRow {
   probability_override: number | null;
   created_at: string;
   updated_at: string;
+  last_engaged_at: string | null;
   accounts: { id: string; name: string; industry: string | null; region: string | null } | null;
   practice_lines: { name: string } | null;
   pipeline_stages: { id: string; name: string; stage_type: StageType; probability_threshold: number } | null;
@@ -429,13 +459,21 @@ interface DealDetailRow {
 // caller's view; deliberately not distinguished, the same not-confirming-existence-to-an-
 // unauthorised-caller shape src/services/deals.ts's changeStage already established for
 // "not_found" - the caller (the deal detail page) renders one honest "not found" state either way.
-export async function getDealDetail(supabase: SupabaseClient, dealId: string): Promise<DealDetail | null> {
+// `timezone`/`now` (M3.7) are the viewer's resolved timezone and the current instant, the same
+// listDeals reasoning: daysSinceLastEngagement is a plain-DATE calculation, never routed through
+// timezone-resolving Intl/Date machinery.
+export async function getDealDetail(
+  supabase: SupabaseClient,
+  dealId: string,
+  timezone: string,
+  now: Date = new Date(),
+): Promise<DealDetail | null> {
   const { data, error } = await supabase
     .from("deals")
     .select(
       "id, reference, name, status, client_type, brief, expected_close_date, actual_close_date, " +
         "forecast_category, proposal_value_minor::text, negotiated_value_minor::text, currency_code, " +
-        "probability_override, created_at, updated_at, " +
+        "probability_override, created_at, updated_at, last_engaged_at, " +
         "accounts(id, name, industry, region), practice_lines(name), " +
         "pipeline_stages(id, name, stage_type, probability_threshold), " +
         "owner:users!owner_id(full_name), author:users!author_id(full_name), " +
@@ -500,6 +538,9 @@ export async function getDealDetail(supabase: SupabaseClient, dealId: string): P
     coOwnerNames: row.deal_co_owners.map((co) => co.user?.full_name).filter((name): name is string => Boolean(name)),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    lastEngagedAt: row.last_engaged_at,
+    daysSinceLastEngagement:
+      row.last_engaged_at === null ? null : daysSincePlainDate(row.last_engaged_at, dateInTimezone(now.toISOString(), timezone)),
   };
 }
 

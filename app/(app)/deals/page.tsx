@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { can } from "@/auth/permissions";
 import { createClient } from "@/lib/supabase/server";
-import { viewToggleHref, type PipelineSearchParams } from "@/lib/pipelineViewLinks";
+import { lastEngagedSortHref, viewToggleHref, type PipelineSearchParams } from "@/lib/pipelineViewLinks";
 import { getPipelineFilterOptions, listPipelineDeals, type DealListFilters } from "@/services/deals";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
@@ -29,6 +29,12 @@ function dateOrUndefined(value: string | undefined): string | undefined {
   return value && DATE_RE.test(value) ? value : undefined;
 }
 
+function positiveIntOrUndefined(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 type SearchParams = PipelineSearchParams;
 
 export default async function DealsPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
@@ -36,7 +42,11 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
   if (!allowed) return <DeniedState message="Pipeline is not available for your role." />;
 
   const params = await searchParams;
-  const filters: DealListFilters = {
+  // Kept separate from sortBy/sortDir below so hasAnyFilter (which decides the empty-state
+  // copy/action) only reacts to something that actually narrows the result set - a sort with zero
+  // matches isn't "no deals match these filters," it's just an empty pipeline, same as no sort at
+  // all.
+  const narrowingFilters: DealListFilters = {
     stageId: uuidOrUndefined(params.stage),
     ownerId: uuidOrUndefined(params.owner),
     practiceLineId: uuidOrUndefined(params.practiceLine),
@@ -46,6 +56,12 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
     status: enumOrUndefined(params.status, STATUSES),
     expectedCloseFrom: dateOrUndefined(params.closeFrom),
     expectedCloseTo: dateOrUndefined(params.closeTo),
+    minDaysSinceEngagement: positiveIntOrUndefined(params.daysSinceEngagement),
+  };
+  const filters: DealListFilters = {
+    ...narrowingFilters,
+    sortBy: params.sort === "lastEngaged" ? "lastEngagedAt" : undefined,
+    sortDir: params.sort === "lastEngaged" && params.dir === "desc" ? "desc" : params.sort === "lastEngaged" ? "asc" : undefined,
   };
 
   const supabase = await createClient();
@@ -61,7 +77,7 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
     listPipelineDeals(supabase, filters, timezone),
   ]);
 
-  const hasAnyFilter = Object.values(filters).some((v) => v !== undefined);
+  const hasAnyFilter = Object.values(narrowingFilters).some((v) => v !== undefined);
   const view = params.view === "board" ? "board" : "table";
 
   return (
@@ -117,8 +133,11 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
           status: params.status,
           closeFrom: params.closeFrom,
           closeTo: params.closeTo,
+          daysSinceEngagement: params.daysSinceEngagement,
         }}
         view={view === "board" ? "board" : undefined}
+        sort={params.sort}
+        dir={params.dir}
       />
 
       {deals.length === 0 ? (
@@ -134,7 +153,7 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
       ) : view === "board" ? (
         <PipelineBoard deals={deals} stages={filterOptions.stages} />
       ) : (
-        <PipelineTable deals={deals} />
+        <PipelineTable deals={deals} sortHref={lastEngagedSortHref(params)} sort={params.sort} dir={params.dir} />
       )}
     </div>
   );

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { dealValue, formatDealReference, isOpenStage, resolveProbability, weightedValue } from "../../src/domain/deal";
+import {
+  dealValue,
+  formatDealReference,
+  formatLastEngaged,
+  isOpenStage,
+  resolveProbability,
+  stalenessBand,
+  weightedValue,
+} from "../../src/domain/deal";
 import { formatMoney, parseMoneyMinor, toMajorUnitsString, toMinorUnits } from "../../src/domain/money";
 
 const STAGE = { probabilityThreshold: 40 };
@@ -171,5 +179,52 @@ describe("toMajorUnitsString", () => {
 
   it("never emits thousands separators - an edit field must parse back cleanly", () => {
     expect(toMajorUnitsString(150_000_000n)).toBe("1500000.00");
+  });
+});
+
+// docs/04-metric-definitions.md's "Staleness bands": "0-7 days green, 8-21 blue, 22-45 amber, 46 or
+// more red." Boundary values asserted on both sides of every threshold, the same "prove the edge,
+// not just the middle" discipline every other band/threshold test in this codebase already follows.
+describe("stalenessBand", () => {
+  it("null (never engaged) is its own distinct band, not folded into the 46+ band", () => {
+    expect(stalenessBand(null)).toBe("never");
+  });
+
+  it("0-7 days is fresh", () => {
+    expect(stalenessBand(0)).toBe("fresh");
+    expect(stalenessBand(7)).toBe("fresh");
+  });
+
+  it("8-21 days is ok", () => {
+    expect(stalenessBand(8)).toBe("ok");
+    expect(stalenessBand(21)).toBe("ok");
+  });
+
+  it("22-45 days is warn", () => {
+    expect(stalenessBand(22)).toBe("warn");
+    expect(stalenessBand(45)).toBe("warn");
+  });
+
+  it("46+ days is cold", () => {
+    expect(stalenessBand(46)).toBe("cold");
+    expect(stalenessBand(400)).toBe("cold");
+  });
+});
+
+describe("formatLastEngaged", () => {
+  it("renders 'Never engaged' for null, per docs/06-ui-spec.md's deal header chip wording", () => {
+    expect(formatLastEngaged(null)).toBe("Never engaged");
+  });
+
+  it("renders 'Last engaged today' for zero days", () => {
+    expect(formatLastEngaged(0)).toBe("Last engaged today");
+  });
+
+  it("renders singular 'day' for exactly one day", () => {
+    expect(formatLastEngaged(1)).toBe("Last engaged 1 day ago");
+  });
+
+  it("renders plural 'days' otherwise, matching docs/06-ui-spec.md's own example", () => {
+    expect(formatLastEngaged(12)).toBe("Last engaged 12 days ago");
   });
 });

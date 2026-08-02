@@ -846,6 +846,64 @@ the "edited" marker and expandable revision history appearing, correct Retract-o
 visibility, successful retraction rendering struck through with reason and retractor name, and (post
 `useId` fix) zero duplicate DOM ids on a timeline with 32 real entries.
 
+**M3.7** adds the last-engaged chip on the deal header; a last-engaged column, sort and "days since
+last engagement" filter on the pipeline table/board; and staleness colour wherever a deal is
+rendered. **One scope deviation, flagged rather than silently built or silently dropped**: the
+backlog line also says "staleness bands wired to the at-risk tile," but no at-risk tile exists
+anywhere in this codebase or in `docs/06-ui-spec.md` - the Dashboard screen (`app/(app)/dashboard/`)
+is a deliberate stub ("This screen lands with the analytics milestones later in the backlog"), and
+role-scoped dashboards are `docs/07-build-backlog.md` **M6.8**, nine milestones away. Building a
+tile against a screen that doesn't exist yet, on top of a spec that doesn't describe it, would
+repeat the exact premature-feature mistake this codebase has deliberately avoided every time before
+(M1.4's filter set, M2.3's staleness-colour deferral, M3.5's three omissions) - so this part is
+deferred to M6.8, where the Dashboard itself gets built, not fixed here.
+
+`docs/04-metric-definitions.md`'s "Staleness bands" (0-7 green, 8-21 blue, 22-45 amber, 46+ red) and
+"null last-engaged means never engaged... not treated as zero" are now real code:
+`src/domain/deal.ts`'s new `stalenessBand`/`formatLastEngaged` treat "never" as a genuine fifth
+state, not folded into the 46+ band, matching the doc's own wording. `src/lib/dates.ts` gained two
+plain-DATE helpers (`daysSincePlainDate`, `subtractDaysFromPlainDate`) - deliberately **not** built
+on the TIMESTAMPTZ-oriented `daysBetweenInTimezone`, for the exact off-by-one-day reason
+`formatPlainDate`'s own comment already gives: `deals.last_engaged_at` is a bare `date` column, the
+same shape as `activities.activity_date`, with no time-of-day or timezone to resolve.
+
+`src/data/deals.ts`'s `listDeals` and `getDealDetail` now select `last_engaged_at` and compute
+`daysSinceLastEngagement`; `DealListFilters` gained `minDaysSinceEngagement` (a never-engaged deal
+always matches - it's at least as stale as any threshold, the same reasoning as the "never" band)
+and the app's **first sort control**, `sortBy`/`sortDir` on `last_engaged_at` (ascending =
+most-stale-first, including nulls; descending = most-recently-engaged-first). `getDealDetail` gained
+required `timezone`/`now` parameters for the same plain-DATE-vs-"today" reasoning `listDeals` already
+established - every call site (the deal detail page, five integration tests) was updated accordingly.
+
+UI: `PipelineTable.tsx`'s new "Last engaged" column is a sortable link
+(`src/lib/pipelineViewLinks.ts`'s new `lastEngagedSortHref`, mirroring `viewToggleHref`'s
+param-preserving shape) coloured by staleness band; `PipelineBoard.tsx`'s cards get the same band as
+a coloured left edge (`docs/06-ui-spec.md`: "staleness colour on the board card's left edge") plus
+the same "Last engaged N days ago" text; `PipelineFilters.tsx` gained a plain numeric "Days since
+last engagement" input, and carries the sort as hidden fields so submitting the filter form doesn't
+silently drop it (the same reason it already carries `view`). The deal header
+(`app/(app)/deals/[id]/page.tsx`) gained the last-engaged chip docs/06-ui-spec.md's exact wording
+calls for: `"Last engaged 12 days ago"` in the staleness colour, or `"Never engaged"` in red.
+
+New `tests/integration/pipeline-list.spec.ts` describe block (6 tests, run after the
+`getEngagementTimeline` block so `advisoryDealId` already has a real, non-null `last_engaged_at`
+from its own real activity history, while `searchDealId` has never had one logged - the fixture's
+permanent "never engaged" case): `listPipelineDeals` and `getDealDetail` agree on the real computed
+`daysSinceLastEngagement`; the never-engaged deal's fields are `null`, not zero; the minimum-days
+filter includes a never-engaged deal but excludes one engaged today; a zero-day filter includes
+both; and both sort directions order the two real deals correctly. Manual browser QA (executive:
+table and board views, the sort link toggling both directions, the days-since-engagement filter
+excluding the freshly-engaged deal; bde: the header chip) confirmed correct rendering and no console
+errors against the real `m1-4-integration-test` fixture - note for future QA against this fixture:
+its `user_roles`/`account_practice_owners`/`deal_co_owners` rows are wiped by this spec file's own
+`afterAll` cleanup, so they need reseeding before browser QA if the integration suite ran most
+recently (the same gap `tests/integration/log-activity.spec.ts`'s own comment already documents).
+
+Verified: typecheck, lint, unit (197, 23 new), RLS (160, unchanged - no new RLS surface, only new
+fields read under the existing `deals_select` scope), integration (58 total, 6 new, against the real
+hosted project, run twice consecutively), and the full Playwright e2e suite (11, unchanged) all
+green.
+
 ## Commands
 
 ```

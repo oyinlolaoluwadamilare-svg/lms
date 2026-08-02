@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
-import { dateInTimezone, daysBetweenInTimezone } from "@/lib/dates";
+import { dateInTimezone, daysBetweenInTimezone, daysSincePlainDate } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import { changeStage, getDealDetail, listPipelineDeals, updateDeal } from "@/services/deals";
 import { getStageHistory } from "@/services/stageEvents";
@@ -340,7 +340,7 @@ describe("listPipelineDeals, daysInCurrentStage (M2.3)", () => {
 describe("getDealDetail", () => {
   it("returns the full header/financial/details/account shape for a practice-entitled bde", async () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
-    const deal = await getDealDetail(client, ids.advisoryDealId);
+    const deal = await getDealDetail(client, ids.advisoryDealId, "Africa/Lagos");
 
     expect(deal).not.toBeNull();
     expect(deal).toMatchObject({
@@ -368,19 +368,19 @@ describe("getDealDetail", () => {
 
   it("an executive (tenant-wide view) can also read it", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deal = await getDealDetail(client, ids.advisoryDealId);
+    const deal = await getDealDetail(client, ids.advisoryDealId, "Africa/Lagos");
     expect(deal?.id).toBe(ids.advisoryDealId);
   });
 
   it("a bde outside the deal's practice gets null - RLS excludes the row entirely, same as changeStage's not_found case", async () => {
     const client = await signIn("m1-4-bde-search@example.com");
-    const deal = await getDealDetail(client, ids.advisoryDealId);
+    const deal = await getDealDetail(client, ids.advisoryDealId, "Africa/Lagos");
     expect(deal).toBeNull();
   });
 
   it("a nonexistent deal id returns null, not an error", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deal = await getDealDetail(client, "00000000-0000-0000-0000-000000000000");
+    const deal = await getDealDetail(client, "00000000-0000-0000-0000-000000000000", "Africa/Lagos");
     expect(deal).toBeNull();
   });
 });
@@ -668,6 +668,80 @@ describe("getEngagementTimeline", () => {
   });
 });
 
+// M3.7 (docs/07-build-backlog.md): "last-engaged column, sort and 'days since last engagement'
+// filter." Deliberately runs after the getEngagementTimeline block above, which is what gives
+// advisoryDealId a real, non-null last_engaged_at (logActivity's trigger-maintained field) -
+// searchDealId, by contrast, has never had an activity logged against it in this fixture's history,
+// so it stays the fixture's permanent "never engaged" case. Both facts are read back independently
+// (not hardcoded), the same reasoning as the daysInCurrentStage block above, since advisoryDealId's
+// last_engaged_at accumulates real history across every run of this suite.
+describe("listPipelineDeals, last-engaged fields, filter and sort (M3.7)", () => {
+  it("getDealDetail and listPipelineDeals agree on advisoryDealId's real, non-null daysSinceLastEngagement", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const { data: dealRow } = await service.from("deals").select("last_engaged_at").eq("id", ids.advisoryDealId).single();
+    expect(dealRow?.last_engaged_at).not.toBeNull();
+
+    const today = dateInTimezone(new Date().toISOString(), "Africa/Lagos");
+    const expectedDays = daysSincePlainDate(dealRow!.last_engaged_at, today);
+
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
+    const advisoryDeal = deals.find((d) => d.id === ids.advisoryDealId);
+    expect(advisoryDeal?.lastEngagedAt).toBe(dealRow!.last_engaged_at);
+    expect(advisoryDeal?.daysSinceLastEngagement).toBe(expectedDays);
+
+    const detail = await getDealDetail(client, ids.advisoryDealId, "Africa/Lagos");
+    expect(detail?.lastEngagedAt).toBe(dealRow!.last_engaged_at);
+    expect(detail?.daysSinceLastEngagement).toBe(expectedDays);
+  });
+
+  it("searchDealId has never had an activity logged - last_engaged_at and daysSinceLastEngagement are null, not zero", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const { data: dealRow } = await service.from("deals").select("last_engaged_at").eq("id", ids.searchDealId).single();
+    expect(dealRow?.last_engaged_at).toBeNull();
+
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
+    const searchDeal = deals.find((d) => d.id === ids.searchDealId);
+    expect(searchDeal?.lastEngagedAt).toBeNull();
+    expect(searchDeal?.daysSinceLastEngagement).toBeNull();
+  });
+
+  it("minDaysSinceEngagement includes a never-engaged deal but excludes one engaged today", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const deals = await listPipelineDeals(client, { minDaysSinceEngagement: 5 }, "Africa/Lagos");
+    const ids_ = deals.map((d) => d.id);
+    expect(ids_).toContain(ids.searchDealId); // never engaged - always at least as stale as any threshold
+    expect(ids_).not.toContain(ids.advisoryDealId); // engaged today - 0 days, below the 5-day threshold
+  });
+
+  it("minDaysSinceEngagement of 0 includes both a never-engaged deal and one engaged today", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const deals = await listPipelineDeals(client, { minDaysSinceEngagement: 0 }, "Africa/Lagos");
+    const ids_ = deals.map((d) => d.id);
+    expect(ids_).toContain(ids.searchDealId);
+    expect(ids_).toContain(ids.advisoryDealId);
+  });
+
+  it("sortBy lastEngagedAt ascending puts the never-engaged deal before the recently-engaged one", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const deals = await listPipelineDeals(client, { sortBy: "lastEngagedAt", sortDir: "asc" }, "Africa/Lagos");
+    const searchIndex = deals.findIndex((d) => d.id === ids.searchDealId);
+    const advisoryIndex = deals.findIndex((d) => d.id === ids.advisoryDealId);
+    expect(searchIndex).toBeGreaterThanOrEqual(0);
+    expect(advisoryIndex).toBeGreaterThanOrEqual(0);
+    expect(searchIndex).toBeLessThan(advisoryIndex);
+  });
+
+  it("sortBy lastEngagedAt descending puts the recently-engaged deal before the never-engaged one", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const deals = await listPipelineDeals(client, { sortBy: "lastEngagedAt", sortDir: "desc" }, "Africa/Lagos");
+    const searchIndex = deals.findIndex((d) => d.id === ids.searchDealId);
+    const advisoryIndex = deals.findIndex((d) => d.id === ids.advisoryDealId);
+    expect(searchIndex).toBeGreaterThanOrEqual(0);
+    expect(advisoryIndex).toBeGreaterThanOrEqual(0);
+    expect(advisoryIndex).toBeLessThan(searchIndex);
+  });
+});
+
 // M1.7 exit criteria (docs/07-build-backlog.md): "Edit deal, with audit entries on every field
 // change." Reuses advisoryDealId again, after changeStage has already moved it to Proposal above -
 // none of these assertions depend on which stage it's in. Ordered so the one real edit (the last
@@ -708,7 +782,7 @@ describe("updateDeal", () => {
     expect(session.status).toBe("active");
     if (session.status !== "active") return;
 
-    const visible = await getDealDetail(client, ids.advisoryDealId);
+    const visible = await getDealDetail(client, ids.advisoryDealId, "Africa/Lagos");
     expect(visible).not.toBeNull();
 
     const result = await updateDeal(client, session.actor, ids.advisoryDealId, editInput);

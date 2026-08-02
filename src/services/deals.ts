@@ -266,8 +266,8 @@ export async function changeStage(
 // check here, same reasoning as listPipelineDeals: migration 0005's deals_select RLS policy is
 // this read's authorisation boundary, and getDealDetail already reads through the caller's own
 // session, not a service-role client.
-export async function getDealDetail(supabase: SupabaseClient, dealId: string): Promise<DealDetail | null> {
-  return getDealDetailRow(supabase, dealId);
+export async function getDealDetail(supabase: SupabaseClient, dealId: string, timezone: string): Promise<DealDetail | null> {
+  return getDealDetailRow(supabase, dealId, timezone);
 }
 
 export interface EditDealInput {

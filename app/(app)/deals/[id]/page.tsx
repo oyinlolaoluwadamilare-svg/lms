@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { formatMoney } from "@/domain/money";
 import { ACTIVITY_TYPE_LABELS } from "@/domain/activity";
+import { formatLastEngaged, stalenessBand, type StalenessBand } from "@/domain/deal";
 import { formatDateInTimezone, formatDurationSeconds, formatPlainDate } from "@/lib/dates";
 import { getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
@@ -16,6 +17,17 @@ import { RetractActivityModal } from "./RetractActivityModal";
 import { TimelineFilters } from "./TimelineFilters";
 
 const STAGE_TYPE_LABEL: Record<string, string> = { open: "Open", won: "Won", lost: "Lost" };
+
+// docs/06-ui-spec.md: "Never engaged" is red - the same red as the 46+ "cold" band (tailwind.config.ts:
+// stale.cold and stale.never share no distinct token because the spec never asks for a fifth colour,
+// only a fifth distinct STATE), so "never" maps onto the "cold" class rather than getting its own.
+const STALENESS_CLASS: Record<StalenessBand, string> = {
+  fresh: "text-stale-fresh",
+  ok: "text-stale-ok",
+  warn: "text-stale-warn",
+  cold: "text-stale-cold",
+  never: "text-stale-cold",
+};
 
 type SearchParams = { type?: string; author?: string };
 
@@ -46,7 +58,7 @@ export default async function DealDetailPage({
   // if the deal itself is invisible to this actor, this comes back empty rather than erroring,
   // which the early return below makes moot anyway.
   const [deal, editView, timeline, canLog, canRetract] = await Promise.all([
-    getDealDetail(supabase, id),
+    getDealDetail(supabase, id, timezone),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
     getEngagementTimeline(supabase, id, timelineFilters),
     session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
@@ -66,6 +78,10 @@ export default async function DealDetailPage({
             <h1 className="text-xl font-semibold text-ink">{deal.name}</h1>
             <span className="rounded-token bg-surface px-2 py-0.5 text-xs font-medium text-muted">{deal.reference}</span>
             <span className="rounded-token bg-accent px-2 py-0.5 text-xs font-medium text-surface">{deal.stage.name}</span>
+            {/* M3.7 (docs/07-build-backlog.md): "Last-engaged chip on the deal header." */}
+            <span className={`text-xs font-medium ${STALENESS_CLASS[stalenessBand(deal.daysSinceLastEngagement)]}`}>
+              {formatLastEngaged(deal.daysSinceLastEngagement)}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             {canLog ? <LogActivityModal dealId={deal.id} timezone={timezone} /> : null}
@@ -83,16 +99,16 @@ export default async function DealDetailPage({
         <p className="text-sm text-muted">{deal.account.name}</p>
       </header>
 
-      {/* Deliberately no next-action strip, last-engaged chip, most primary action buttons (Add
-          Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), stakeholders or open tasks
-          here - docs/06-ui-spec.md's full Deal detail spec includes all of these, but every one
-          depends on an entity or action that doesn't exist yet (tasks: M4+; mark won/lost:
-          M5.2-M5.3). Log Activity (M3.4) and Edit Deal (M1.7) are the two actions that now exist.
-          The engagement timeline below (M3.5) supersedes M2.4's narrower stage-history-only panel,
-          merging it with the activities this modal writes - see its own section comment for what
-          of the full spec is still deliberately missing (attributed contacts, edit markers,
-          retraction styling). Otherwise this is the same read-only skeleton docs/07-build-backlog.md
-          M1.6 asked for: header, financial summary, details, account. */}
+      {/* Deliberately no next-action strip, most primary action buttons (Add Task, Advance Stage,
+          Mark Won/Lost, Escalate, Add Contact), stakeholders or open tasks here -
+          docs/06-ui-spec.md's full Deal detail spec includes all of these, but every one depends on
+          an entity or action that doesn't exist yet (tasks: M4+; mark won/lost: M5.2-M5.3). Log
+          Activity (M3.4), Edit Deal (M1.7) and the last-engaged chip (M3.7) are what now exist. The
+          engagement timeline below (M3.5/M3.6) supersedes M2.4's narrower stage-history-only panel,
+          merging it with the activities this modal writes - see its own section comment for what of
+          the full spec is still deliberately missing (attributed contacts). Otherwise this is the
+          same read-only skeleton docs/07-build-backlog.md M1.6 asked for: header, financial
+          summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">

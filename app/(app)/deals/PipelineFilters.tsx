@@ -15,6 +15,8 @@ export function PipelineFilters({
   owners,
   values,
   view,
+  sort,
+  dir,
 }: {
   accounts: Option[];
   practiceLines: Option[];
@@ -22,10 +24,17 @@ export function PipelineFilters({
   owners: Option[];
   values: Record<string, string | undefined>;
   view?: string;
+  sort?: string;
+  dir?: string;
 }) {
   return (
     <form method="get" className="flex flex-wrap items-end gap-3 rounded-token border border-line bg-raised p-4">
       {view ? <input type="hidden" name="view" value={view} /> : null}
+      {/* Submitting this form is a plain GET, so the column-header sort (src/lib/pipelineViewLinks.ts's
+          lastEngagedSortHref) would otherwise be silently dropped on "Apply filters" - carried as
+          hidden fields, the same reasoning `view` already is. */}
+      {sort ? <input type="hidden" name="sort" value={sort} /> : null}
+      {dir ? <input type="hidden" name="dir" value={dir} /> : null}
       <Select name="stage" label="Stage" value={values.stage} options={stages} />
       <Select name="owner" label="Owner" value={values.owner} options={owners} />
       <Select name="practiceLine" label="Practice line" value={values.practiceLine} options={practiceLines} />
@@ -84,6 +93,21 @@ export function PipelineFilters({
           type="date"
           defaultValue={values.closeTo ?? ""}
           className="rounded-token border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent"
+        />
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="daysSinceEngagement" className="text-sm font-medium text-ink">
+          Days since last engagement
+        </label>
+        <input
+          id="daysSinceEngagement"
+          name="daysSinceEngagement"
+          type="number"
+          min={0}
+          step={1}
+          defaultValue={values.daysSinceEngagement ?? ""}
+          placeholder="e.g. 30"
+          className="w-32 rounded-token border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent"
         />
       </div>
 

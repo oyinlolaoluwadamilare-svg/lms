@@ -3,9 +3,20 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { formatLastEngaged, stalenessBand, type StalenessBand } from "@/domain/deal";
 import { formatMoney } from "@/domain/money";
 import type { DealListRow, PipelineStageOption } from "@/services/deals";
 import { changeStageAction } from "./actions";
+
+// docs/06-ui-spec.md: "staleness colour on the board card's left edge." Same band-to-class mapping
+// as PipelineTable.tsx/the deal detail header, just applied to a border instead of text.
+const STALENESS_BORDER_CLASS: Record<StalenessBand, string> = {
+  fresh: "border-l-stale-fresh",
+  ok: "border-l-stale-ok",
+  warn: "border-l-stale-warn",
+  cold: "border-l-stale-cold",
+  never: "border-l-stale-cold",
+};
 
 // Native HTML5 drag-and-drop, not a library - no dnd dependency exists in this repo yet, and
 // CLAUDE.md requires a recorded decision (docs/DECISIONS.md) before adding one. Good enough for a
@@ -159,7 +170,9 @@ function BoardColumn({
             key={deal.id}
             draggable
             onDragStart={() => onCardDragStart(deal.id)}
-            className="cursor-grab rounded-token border border-line bg-surface p-2 text-[13.5px] active:cursor-grabbing"
+            className={`cursor-grab rounded-token border border-l-4 border-line bg-surface p-2 text-[13.5px] active:cursor-grabbing ${
+              STALENESS_BORDER_CLASS[stalenessBand(deal.daysSinceLastEngagement)]
+            }`}
           >
             <Link href={`/deals/${deal.id}`} prefetch={false} className="font-medium text-ink hover:text-accent hover:underline">
               {deal.name}
@@ -171,6 +184,7 @@ function BoardColumn({
             <p className="text-xs text-muted">
               {deal.daysInCurrentStage} {deal.daysInCurrentStage === 1 ? "day" : "days"} in stage
             </p>
+            <p className="text-xs text-muted">{formatLastEngaged(deal.daysSinceLastEngagement)}</p>
             {deal.value ? <p className="mt-1 text-xs text-ink">{formatMoney(deal.value)}</p> : null}
           </div>
         ))}

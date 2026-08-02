@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   dateInTimezone,
   daysBetweenInTimezone,
+  daysSincePlainDate,
   formatDateInTimezone,
   formatDurationSeconds,
   formatPlainDate,
   resolveTimezone,
+  subtractDaysFromPlainDate,
 } from "@/lib/dates";
 
 describe("resolveTimezone", () => {
@@ -99,6 +101,43 @@ describe("formatPlainDate", () => {
     // could shift a date at a UTC-negative timezone's local midnight boundary.
     expect(formatPlainDate("2026-01-01")).toBe("01/01/2026");
     expect(formatPlainDate("2026-12-31")).toBe("31/12/2026");
+  });
+});
+
+describe("daysSincePlainDate", () => {
+  it("is zero for the same date", () => {
+    expect(daysSincePlainDate("2026-03-09", "2026-03-09")).toBe(0);
+  });
+
+  it("counts several whole days with plain Date.UTC arithmetic, no timezone involved", () => {
+    expect(daysSincePlainDate("2026-03-01", "2026-03-08")).toBe(7);
+  });
+
+  it("crosses a month boundary correctly", () => {
+    expect(daysSincePlainDate("2026-01-25", "2026-02-05")).toBe(11);
+  });
+
+  it("clamps a negative span (date later than today) to zero", () => {
+    expect(daysSincePlainDate("2026-03-10", "2026-03-09")).toBe(0);
+  });
+});
+
+describe("subtractDaysFromPlainDate", () => {
+  it("subtracts whole days within the same month", () => {
+    expect(subtractDaysFromPlainDate("2026-03-09", 7)).toBe("2026-03-02");
+  });
+
+  it("crosses a month boundary backwards", () => {
+    expect(subtractDaysFromPlainDate("2026-03-01", 1)).toBe("2026-02-28");
+  });
+
+  it("crosses a year boundary backwards", () => {
+    expect(subtractDaysFromPlainDate("2026-01-01", 1)).toBe("2025-12-31");
+  });
+
+  it("round-trips with daysSincePlainDate: N days before today is exactly N days since", () => {
+    const cutoff = subtractDaysFromPlainDate("2026-03-09", 30);
+    expect(daysSincePlainDate(cutoff, "2026-03-09")).toBe(30);
   });
 });
 

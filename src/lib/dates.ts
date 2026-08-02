@@ -59,6 +59,35 @@ export function formatPlainDate(yyyyMmDd: string): string {
   return `${day}/${month}/${year}`;
 }
 
+// A plain YYYY-MM-DD string always splits into exactly three numeric parts - the non-null
+// assertions below trust that shape (every caller in this file already validates or produces it),
+// not an unchecked assumption about arbitrary input.
+function parsePlainDateUtcMs(yyyyMmDd: string): number {
+  const [year, month, day] = yyyyMmDd.split("-").map(Number);
+  return Date.UTC(year!, month! - 1, day!);
+}
+
+// Whole calendar days between two plain DATE values (YYYY-MM-DD, no time-of-day or timezone
+// component at all - e.g. deals.last_engaged_at, the same shape as activities.activity_date) -
+// deliberately NOT built on daysBetweenInTimezone, which resolves TIMESTAMPTZ instants through a
+// timezone and would risk exactly the off-by-one-day bug formatPlainDate's own comment warns
+// against if a caller ever mis-supplied one. Plain Date.UTC arithmetic on the two date strings
+// has no such risk. Never negative, same clamping reasoning as daysBetweenInTimezone.
+export function daysSincePlainDate(date: string, today: string): number {
+  return Math.max(0, Math.round((parsePlainDateUtcMs(today) - parsePlainDateUtcMs(date)) / DAY_MS));
+}
+
+// The cutoff-date counterpart to daysSincePlainDate - turns a "days since last engagement" filter
+// input into a last_engaged_at.lte(...) cutoff a SQL query can use directly. Same plain Date.UTC
+// arithmetic, same no-timezone-to-resolve reasoning.
+export function subtractDaysFromPlainDate(date: string, days: number): string {
+  const cutoff = new Date(parsePlainDateUtcMs(date) - days * DAY_MS);
+  const yyyy = cutoff.getUTCFullYear().toString().padStart(4, "0");
+  const mm = (cutoff.getUTCMonth() + 1).toString().padStart(2, "0");
+  const dd = cutoff.getUTCDate().toString().padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 // A human-readable rendering of a stage_events.duration_in_previous_seconds value - whole days once
 // it's at least one, else whole hours, else whole minutes, else "under a minute". Presentational
 // only (how to phrase a number of seconds), not an analytic metric formula - docs/04-metric-
