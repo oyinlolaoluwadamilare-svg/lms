@@ -16,6 +16,7 @@ import { AddTaskModal } from "./AddTaskModal";
 import { AttachmentLink } from "./AttachmentLink";
 import { EditActivityModal } from "./EditActivityModal";
 import { LogActivityModal } from "./LogActivityModal";
+import { NextActionStrip } from "./NextActionStrip";
 import { RetractActivityModal } from "./RetractActivityModal";
 import { TimelineFilters } from "./TimelineFilters";
 
@@ -82,6 +83,16 @@ export default async function DealDetailPage({
             <h1 className="text-xl font-semibold text-ink">{deal.name}</h1>
             <span className="rounded-token bg-surface px-2 py-0.5 text-xs font-medium text-muted">{deal.reference}</span>
             <span className="rounded-token bg-accent px-2 py-0.5 text-xs font-medium text-surface">{deal.stage.name}</span>
+            {/* M4.4 (docs/07-build-backlog.md): "the next-action strip and the 'No next step' state
+                on the deal header." */}
+            <NextActionStrip
+              dealId={deal.id}
+              timezone={timezone}
+              actorId={currentActorId ?? undefined}
+              canAddTask={addTaskContext.canAddTask}
+              assignableUsers={addTaskContext.assignableUsers}
+              nextAction={deal.nextAction}
+            />
             {/* M3.7 (docs/07-build-backlog.md): "Last-engaged chip on the deal header." */}
             <span className={`text-xs font-medium ${STALENESS_CLASS[stalenessBand(deal.daysSinceLastEngagement)]}`}>
               {formatLastEngaged(deal.daysSinceLastEngagement)}
@@ -114,17 +125,18 @@ export default async function DealDetailPage({
         <p className="text-sm text-muted">{deal.account.name}</p>
       </header>
 
-      {/* Deliberately no next-action strip, stakeholders or open-tasks list here -
-          docs/06-ui-spec.md's full Deal detail spec includes all of these, but every one depends on
-          an entity or derivation that doesn't exist yet (next_action_task_id: M4.4; stakeholders:
-          M5.5's contacts). Log Activity (M3.4), Add Task (M4.3), Edit Deal (M1.7) and the
-          last-engaged chip (M3.7) are what now exist; Advance Stage, Mark Won/Lost, Escalate and Add
-          Contact are still missing (M2.2's board drag already moves stage; the rest is M5+). The
-          engagement timeline below (M3.5/M3.6) supersedes M2.4's narrower stage-history-only panel,
-          merging it with the activities this modal writes - see its own section comment for what of
-          the full spec is still deliberately missing (attributed contacts). Otherwise this is the
-          same read-only skeleton docs/07-build-backlog.md M1.6 asked for: header, financial
-          summary, details, account. */}
+      {/* Deliberately no stakeholders or open-tasks list here - docs/06-ui-spec.md's full Deal
+          detail spec includes both, but each depends on an entity that doesn't exist yet
+          (stakeholders: M5.5's contacts; the "Open tasks" inline list with per-row inline complete:
+          M4.5, the same milestone that builds My Work's own inline-complete interaction this list
+          would otherwise duplicate ahead of time). Log Activity (M3.4), Add Task (M4.3), the
+          next-action strip (M4.4), Edit Deal (M1.7) and the last-engaged chip (M3.7) are what now
+          exist; Advance Stage, Mark Won/Lost, Escalate and Add Contact are still missing (M2.2's
+          board drag already moves stage; the rest is M5+). The engagement timeline below (M3.5/M3.6)
+          supersedes M2.4's narrower stage-history-only panel, merging it with the activities this
+          modal writes - see its own section comment for what of the full spec is still deliberately
+          missing (attributed contacts). Otherwise this is the same read-only skeleton
+          docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">

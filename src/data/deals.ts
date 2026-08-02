@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { daysBetweenInTimezone, daysSincePlainDate, dateInTimezone, subtractDaysFromPlainDate } from "@/lib/dates";
 import { getLatestStageEventOccurredAtByDeal } from "@/data/stageEvents";
 import { parseMoneyMinor, type Money } from "@/domain/money";
+import type { TaskPriority } from "@/domain/task";
 import {
   dealValue,
   formatDealReference,
@@ -426,6 +427,7 @@ export interface DealDetail {
   updatedAt: string;
   lastEngagedAt: string | null;
   daysSinceLastEngagement: number | null;
+  nextAction: { taskId: string; title: string; dueDate: string; priority: TaskPriority } | null;
 }
 
 interface DealDetailRow {
@@ -451,6 +453,7 @@ interface DealDetailRow {
   owner: { full_name: string } | null;
   author: { full_name: string } | null;
   deal_co_owners: Array<{ user: { full_name: string } | null }>;
+  next_action: { id: string; title: string; due_date: string; priority: TaskPriority } | null;
 }
 
 // Reads through the CALLER's own RLS-scoped session, same as listDeals - migration 0005's
@@ -477,7 +480,8 @@ export async function getDealDetail(
         "accounts(id, name, industry, region), practice_lines(name), " +
         "pipeline_stages(id, name, stage_type, probability_threshold), " +
         "owner:users!owner_id(full_name), author:users!author_id(full_name), " +
-        "deal_co_owners(user:users!user_id(full_name))",
+        "deal_co_owners(user:users!user_id(full_name)), " +
+        "next_action:tasks!next_action_task_id(id, title, due_date, priority)",
     )
     .eq("id", dealId)
     .is("deleted_at", null)
@@ -541,6 +545,14 @@ export async function getDealDetail(
     lastEngagedAt: row.last_engaged_at,
     daysSinceLastEngagement:
       row.last_engaged_at === null ? null : daysSincePlainDate(row.last_engaged_at, dateInTimezone(now.toISOString(), timezone)),
+    // M4.4 (docs/07-build-backlog.md): "the next-action strip and the 'No next step' state on the
+    // deal header." next_action_task_id/next_action_due_date (migration 0005) are now kept correct
+    // by migration 0013's refresh_deal_next_action() trigger - null genuinely means "no open task",
+    // not "hasn't been computed yet" (CLAUDE.md #7). The embed re-derives title/priority from the
+    // task row itself rather than duplicating them onto deals - next_action_due_date is left unused
+    // here in favour of the fresher `due_date` this same join already provides, though both are
+    // always in sync by construction.
+    nextAction: row.next_action ? { taskId: row.next_action.id, title: row.next_action.title, dueDate: row.next_action.due_date, priority: row.next_action.priority } : null,
   };
 }
 

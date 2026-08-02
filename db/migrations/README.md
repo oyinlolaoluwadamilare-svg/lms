@@ -115,3 +115,25 @@ no insert policy for `authenticated`) is this migration's own design, reasoned f
 in a reference implementation. `tests/rls/notifications.spec.ts` (8 tests, against local Postgres)
 covers it directly; `tests/integration/assign-task.spec.ts` (M4.2, 8 tests, against the real hosted
 project) exercises the real insert path end to end via `assignTask`'s service-role write.
+
+`0013_next_action_trigger` was applied to the hosted project the same way - forward/backward-tested
+locally first (including a manual SQL walkthrough of insert/complete/complete-the-last-one, to prove
+the bug fix below before ever touching the real project), then applied for real; `schema_migrations`
+there now lists `0001` through `0013`. Adds the FK `deals.next_action_task_id` → `tasks(id)` that
+migration 0005 deferred (tasks didn't exist yet), and `refresh_deal_next_action()` +
+`trg_task_refresh`, both deliberately deferred out of migration 0011 (that migration's own header
+comment named this exact split).
+
+**A genuine bug in `db/schema.sql`'s own reference trigger**, found by reasoning through it rather
+than porting it verbatim: its `refresh_deal_next_action()` does
+`update deals d set ... from (select ... limit 1) sub where d.id = ...` - an `UPDATE ... FROM
+(subquery)` only touches rows where the subquery contributes at least one row. When a deal's LAST
+open task closes (done/cancelled/soft-deleted), that subquery returns zero rows, so the UPDATE
+touches zero rows - `next_action_task_id`/`next_action_due_date` would be left pointing at the
+now-closed task forever, never clearing back to null. Confirmed directly against local Postgres
+before writing the fix (a manual `insert → complete → complete-the-last-remaining-one` walkthrough
+reproduced the stale reference exactly as predicted). Fixed with an explicit `if not found` branch
+that clears both columns when no open task remains - `tests/integration/next-action.spec.ts` (M4.4,
+5 tests, against the real hosted project, run twice consecutively) exercises exactly this sequence
+through the real `createTask` service and `getDealDetail`'s own `nextAction` field, with its final
+test asserting the previously-stale case specifically.

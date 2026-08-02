@@ -1293,6 +1293,54 @@ Verified: typecheck, lint, unit (210, 4 new), RLS (220, unchanged), integration 
 createTask/getAddTaskContext - `assignTask`'s own pre-existing 8 re-verified green after the
 permission fix), and the full Playwright e2e suite (11, unchanged) all green.
 
+**M4.4** (`next_action_task_id` derivation trigger; the next-action strip and the "No next step"
+state on the deal header) is implemented and verified.
+
+Migration `0013_next_action_trigger` adds the FK `deals.next_action_task_id` → `tasks(id)` that
+migration 0005 deferred (tasks didn't exist yet - the same "can't reference a table that isn't
+there" deferral this codebase has hit repeatedly), plus `refresh_deal_next_action()` and
+`trg_task_refresh`, both deliberately left out of migration 0011 (that migration's own header
+comment named this exact split, mirroring the M3.1/M3.2 engagement-trigger precedent).
+
+**A genuine bug in `db/schema.sql`'s own reference trigger was found and fixed**, not silently
+ported: its `refresh_deal_next_action()` does an `UPDATE ... FROM (subquery)`, which only touches
+the target row when the subquery returns at least one row. When a deal's LAST open task closes
+(done, cancelled, or soft-deleted), that subquery correctly returns zero rows - so the UPDATE
+touches zero rows, and `next_action_task_id`/`next_action_due_date` would be left pointing at the
+now-closed task forever, never clearing back to null. Confirmed directly against local Postgres with
+a manual `insert → complete → complete-the-last-remaining-one` walkthrough before writing the fix -
+`next_action_task_id` really did stay stale exactly as reasoning through the SQL predicted. Fixed
+with an explicit `if not found` branch that clears both columns when no open task remains -
+docs/06-ui-spec.md's own "No next step - add one" empty state depends on this genuinely becoming
+null, not just usually being null (CLAUDE.md #7: "a staleness indicator that is itself stale is
+worse than no indicator").
+
+`getDealDetail` (`src/data/deals.ts`) gained a `nextAction` field via a nested embed on
+`tasks!next_action_task_id`, re-deriving title/due date/priority from the task row itself rather
+than duplicating them onto `deals`. `NextActionStrip.tsx` renders either "Next: {title} · due
+{DD/MM/YYYY}" or, when null, an amber "No next step — add one" button (only when the actor can add
+tasks - otherwise plain "No next step" text) - the CTA embeds the identical `AddTaskModal` the
+header's own standalone "Add Task" button already uses (M4.3), the same `showTrigger=false`
+composition `LogActivityModal`'s "Save and add task" already established, so there are two entry
+points to the same single creation path, not two different features.
+
+New `tests/integration/next-action.spec.ts` (5 tests, against the real hosted project, run twice
+consecutively) exercises the real `createTask` service and `getDealDetail`'s own `nextAction` field
+end to end: a deal with no open tasks has a null `nextAction`; creating a task sets it; a task due
+earlier becomes the new `nextAction` even though it was created second; completing the earliest task
+falls back to the next-earliest remaining one; and completing the LAST remaining open task clears
+`nextAction` back to null - the specific case the bug fix above targets.
+
+Manual browser QA (real dev server, real hosted project): the amber "No next step — add one" CTA
+renders next to the stage chip; clicking it opens the same Add Task modal; after saving and a fresh
+page load, the strip correctly reads "Next: {title} · due {date}" - confirmed against real database
+rows (`deals.next_action_task_id`/`next_action_due_date`), not just UI appearance.
+
+Verified: typecheck, lint, unit (210, unchanged), RLS (220, unchanged), integration (93, 5 new),
+and the full Playwright e2e suite (11, unchanged) all green. Migration `0013_next_action_trigger`
+tested forward and backward against local Postgres before being applied for real; `schema_migrations`
+on the hosted project now lists `0001` through `0013`.
+
 ## Commands
 
 ```
