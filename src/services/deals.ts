@@ -27,6 +27,7 @@ import { getStageById, listAllStages, listOpenStages, type PipelineStageOption }
 export type { PipelineStageOption };
 import { listActiveUsersInTenant } from "@/data/users";
 import { writeAudit } from "@/services/audit";
+import { writeStageEvent } from "@/services/stageEvents";
 import type { AppUser } from "@/domain/user";
 import { isOpenStage, type ClientType } from "@/domain/deal";
 
@@ -187,10 +188,20 @@ export type ChangeStageResult =
 //    what makes this a real control and not presentation-only (CLAUDE.md #1).
 //
 // Known gap, same one src/services/audit.ts's own comment already flags for every compound write in
-// this Supabase-client architecture: the deal update and the audit write below are two separate
-// calls, not one transaction. If the audit write throws, the stage has already changed, un-audited.
-// M2.1's stage_events table (and the Postgres-function-backed atomic writer that comment calls for)
-// is the real fix; not built yet.
+// this Supabase-client architecture: the deal update, the stage_events write and the audit write
+// below are three separate calls, not one transaction. If either write below throws, the stage has
+// already changed, incompletely recorded. The Postgres-function-backed atomic writer that comment
+// calls for is the real fix; not built yet.
+//
+// M2.1/M2.2 (docs/07-build-backlog.md): this is the one and only place a stage_events row is
+// written, per docs/01-domain-model.md's "there must be exactly one code path that moves a stage."
+// M2.2 also names five other transition paths this same function must serve - edit form, API, bulk
+// action, mark-won, mark-lost - so every stage change writes exactly one event: none of those five
+// exist in this codebase yet (the edit form, M1.7, deliberately excludes stage; there is no API or
+// bulk-action surface; mark-won/mark-lost belong to closeDeal, M5.2, not built). Board drag (this
+// function) is the only real transition path today, and the only one actually exercised by
+// tests/integration/pipeline-list.spec.ts's stage_events assertions - each future path is required
+// to route through this same changeStage, not to reimplement any part of it.
 export async function changeStage(
   supabase: SupabaseClient,
   actor: Actor,
@@ -225,6 +236,14 @@ export async function changeStage(
   }
 
   await updateDealStage(supabase, dealId, toStageId);
+
+  await writeStageEvent({
+    tenantId: actor.tenantId,
+    dealId,
+    fromStageId: deal.stageId,
+    toStageId,
+    actorId: actor.id,
+  });
 
   await writeAudit({
     tenantId: actor.tenantId,

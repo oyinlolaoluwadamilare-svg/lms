@@ -9,8 +9,9 @@ Start here, in order:
 2. [`docs/DECISIONS.md`](./docs/DECISIONS.md) — open questions blocking implementation, and
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
-   backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
-   through task M1.8. **M1 — Deals and pipeline is complete.**
+   backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
+   Current milestone: **M2 — Engagement history**, through task M2.1/M2.2 (in progress — see the
+   `## M2` section below for a disclosed real-project verification gap).
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -376,6 +377,69 @@ Verified: both new files pass in full (70 and 20 tests respectively) alongside e
 - typecheck, lint, unit (150 tests total), RLS (99 tests total, all five files together), and a
 re-run of `test:integration` and the full Playwright e2e suite confirming this test-only milestone
 introduced no regressions anywhere else.
+
+## M2 — Engagement history
+
+**M2.1/M2.2** (`stage_events` table, immutability triggers, the regression-derived column, and
+refactoring `changeStage` to write exactly one event per transition) are implemented and verified
+locally; one real-project gap is disclosed below rather than worked around.
+
+Migration `0007_stage_events` follows `db/schema.sql`'s own column list exactly - one deliberate
+deviation, called out rather than silently reproduced: `docs/01-domain-model.md` specifies
+`is_regression` as "generated: `to_stage.sort_order < from_stage.sort_order`," but a Postgres
+`generated` column can only reference the *same row's* other columns, never another table's -
+`db/schema.sql` itself already reflects this (`is_regression boolean not null default false`, not a
+generated column). This migration computes both `is_regression` and
+`duration_in_previous_seconds` in a `before insert` trigger instead - CLAUDE.md #7 ("derived fields
+are computed transactionally on write, never by nightly batch") is satisfied by the trigger being
+authoritative and running inside the insert, not by the column being `generated`. `is_regression` is
+always trigger-computed (it depends only on the two stages' `sort_order`, not timing);
+`duration_in_previous_seconds` is only trigger-computed for a *live* event
+(`is_reconstructed = false`) - a future backfill tool (not built) supplies its own value for
+migrated history, which the trigger leaves untouched.
+
+RLS mirrors `deals_select`'s scope shape exactly (tenant-wide for `tenant_admin`/`executive`,
+practice-entitled otherwise) - via the `deal_tenant_id()`/`deal_practice_line_id()` security-definer
+helper functions from migration 0005, not `db/schema.sql`'s own literal
+`exists (select 1 from deals d where d.id = deal_id and ...)`, which would reintroduce the exact
+cross-table RLS recursion ("infinite recursion detected in policy") migration 0005 already found and
+fixed for `deal_co_owners` the same way. No insert/update/delete policy for `authenticated` at all -
+service_role only, the same immutable-history shape `audit_entries` already established, plus
+`forbid_mutation()` (migration 0004) reused as `trg_no_update_stage_events`.
+
+`src/services/deals.ts`'s `changeStage` now calls the new `src/services/stageEvents.ts`'s
+`writeStageEvent` alongside its existing `writeAudit` call, on every successful move - the single
+path M2.2 requires. Board drag (via `changeStage`) is the only real transition path that exists in
+this codebase today; M2.2's stated scope names five more paths to test ("form, board, API, bulk,
+mark-won, mark-lost") that don't yet exist here - the edit form (M1.7) deliberately excludes stage,
+there is no API or bulk-action surface, and mark-won/mark-lost belong to `closeDeal` (M5.2, not
+built) - so only board-drag is actually wired or tested this milestone; each future path is required
+to route through this same `changeStage`, never to reimplement any part of it.
+
+New `tests/rls/stage_events.spec.ts` (13 tests) proves the trigger's own arithmetic directly against
+local Postgres, independent of `changeStage`: duration falls back to the deal's `created_at` when no
+prior event exists, is computed from the true prior event once one does, `is_regression` flips
+correctly in both directions and is `false` for a null `from_stage_id`, a reconstructed event's
+supplied duration is trusted rather than overwritten, both `update` and `delete` are blocked for
+every writer including the table-owner migrator connection, and the select policy's practice/tenant
+scoping and complete absence of an insert policy are both verified per identity.
+
+**Disclosed gap, verified directly rather than assumed:** migration 0007 (like 0006 before it) has
+not been applied to the real hosted Supabase project - this container still has no raw-TCP Postgres
+egress and no Management API token this session. Unlike 0006 (whose gap was a column nobody
+asserted on), this one is load-bearing: `changeStage` now unconditionally writes a `stage_events` row
+on every successful move, so `tests/integration/pipeline-list.spec.ts`'s "the owning bde moves their
+deal to another open stage" test genuinely fails against the real project right now -
+`insertStageEvent failed: Could not find the table 'public.stage_events' in the schema cache` - not a
+hypothetical, run and confirmed. See `db/migrations/README.md` for the same note. Outstanding manual
+step: apply `db/migrations/0007_stage_events.up.sql` to the hosted project (Management API token or
+the Supabase dashboard's SQL editor), after which that one integration test is expected to pass
+without any code change.
+
+Verified otherwise: typecheck, lint, unit (150 tests), RLS (112 tests across all seven files,
+including the 13 new to this milestone) all green; `test:integration` run against the real project
+shows exactly the one known, disclosed failure above and nothing else - every other test in that
+suite (including every other `changeStage`/`updateDeal` case) still passes unchanged.
 
 ## Commands
 
