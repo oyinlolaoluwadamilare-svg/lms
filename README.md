@@ -1464,6 +1464,48 @@ Verified: typecheck, lint, unit (219, 1 net new - the navigation suite gained a 
 assertion), RLS (220, unchanged), integration (106, 3 new), and the full Playwright e2e suite (11,
 unchanged) all green.
 
+**M4.7** ("No next step" filter and dashboard tile listing active deals lacking an open task) is
+implemented and verified. No new migration - `next_action_task_id` (M4.4) and its own partial index
+(`deals_no_next_action`, migration 0005) already anticipated this exact feature.
+
+The filter (`noNextStep` on `DealListFilters`, `src/data/deals.ts`) is deliberately the exact
+complement of `docs/04-metric-definitions.md`'s own "Next-action coverage" metric ("active deals
+with `next_action_task_id is not null`, over all active deals") - not a looser "next_action_task_id
+is null" on its own, which would also (wrongly) match every closed won/lost deal. Setting the
+checkbox filters to `status = 'active' AND next_action_task_id is null`, matching the schema
+author's own partial index exactly and keeping the query index-backed. Combining the checkbox with
+an explicit conflicting `status` filter (e.g. "Won") is a genuine contradiction and correctly
+returns zero rows rather than silently picking one side - verified directly in the new integration
+test.
+
+The dashboard (`app/(app)/dashboard/page.tsx`) was a bare M0-era stub before this - this is the
+first real tile it has ever had, and deliberately just JSX, not a new tile/grid abstraction: one
+tile doesn't earn a reusable component, the real analytics build (M6) is where that pattern would
+actually pay for itself. The tile shows a count (in `risk` orange when non-zero) and links to
+`/deals?noNextStep=1`; a new `countDealsWithoutNextAction` (`src/data/deals.ts`) backs it - a plain
+`count: "exact", head: true` query, not a fetch of every joined column `listDeals` pulls, since the
+tile only needs the number. Read through the caller's own RLS-scoped session (no service-role
+client), so it automatically matches whatever the Pipeline list itself would show a Director (their
+own practice), an Executive, or a tenant_admin (tenant-wide) with the same filter applied - zero new
+authorization code, same as every other read in this app.
+
+New `tests/integration/no-next-step.spec.ts` (5 tests, against the real hosted project, its own
+dedicated tenant rather than extending `pipeline-list.spec.ts`'s large shared fixture so the
+tenant-wide count assertion stays exact and unambiguous): the filter returns only the active,
+task-less deal; excludes a deal with an open task; excludes a *won* deal with no task (proving
+"active AND no next step," not merely "no next step"); confirms the conflicting-filter-combination
+zero-row behaviour; and confirms `countActiveDealsWithoutNextAction` counts exactly one. Also
+extended `tests/unit/pipelineViewLinks.spec.ts` with a direct `noNextStep` preservation assertion.
+
+Manual browser QA (real dev server, real hosted project, the same dedicated QA tenant, with a
+director user added to it and a second QA deal seeded with no open task): the dashboard tile
+correctly showed "1" in risk orange with the right copy; the tile's own link correctly landed on
+the Pipeline table filtered to that one deal; and a direct `/deals?noNextStep=1` navigation showed
+the checkbox correctly pre-checked from the URL and the table correctly narrowed to just that deal.
+
+Verified: typecheck, lint, unit (220, 1 new), RLS (220, unchanged), integration (111, 5 new), and
+the full Playwright e2e suite (11, unchanged) all green.
+
 ## Commands
 
 ```

@@ -4,6 +4,7 @@ import { listAccounts } from "@/data/accounts";
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import {
   applyDealEdit,
+  countDealsWithoutNextAction,
   DealReferenceConflictError,
   getDealDetail as getDealDetailRow,
   getDealForEdit,
@@ -171,6 +172,12 @@ export async function listPipelineDeals(
   timezone: string,
 ): Promise<DealListRow[]> {
   return listDeals(supabase, filters, timezone);
+}
+
+// M4.7's dashboard tile passthrough - same reasoning as listPipelineDeals above: RLS is the whole
+// authorisation boundary for this read, so there is nothing for a service-layer can() check to add.
+export async function countActiveDealsWithoutNextAction(supabase: SupabaseClient): Promise<number> {
+  return countDealsWithoutNextAction(supabase);
 }
 
 export type ChangeStageResult =

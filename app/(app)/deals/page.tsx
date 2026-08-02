@@ -57,6 +57,7 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
     expectedCloseFrom: dateOrUndefined(params.closeFrom),
     expectedCloseTo: dateOrUndefined(params.closeTo),
     minDaysSinceEngagement: positiveIntOrUndefined(params.daysSinceEngagement),
+    noNextStep: params.noNextStep === "1" ? true : undefined,
   };
   const filters: DealListFilters = {
     ...narrowingFilters,
@@ -134,6 +135,7 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
           closeFrom: params.closeFrom,
           closeTo: params.closeTo,
           daysSinceEngagement: params.daysSinceEngagement,
+          noNextStep: params.noNextStep,
         }}
         view={view === "board" ? "board" : undefined}
         sort={params.sort}

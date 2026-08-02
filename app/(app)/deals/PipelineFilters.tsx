@@ -111,6 +111,23 @@ export function PipelineFilters({
         />
       </div>
 
+      {/* M4.7 (docs/07-build-backlog.md): "'No next step' filter... active deals lacking an open
+          task" - src/data/deals.ts's noNextStep filter already folds in status = 'active', so this
+          checkbox needs no separate status selection alongside it. */}
+      <div className="flex items-center gap-2 pb-2">
+        <input
+          id="noNextStep"
+          name="noNextStep"
+          type="checkbox"
+          value="1"
+          defaultChecked={values.noNextStep === "1"}
+          className="h-4 w-4 rounded border-line text-accent outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        />
+        <label htmlFor="noNextStep" className="text-sm font-medium text-ink">
+          No next step
+        </label>
+      </div>
+
       <div className="flex gap-2">
         <button
           type="submit"

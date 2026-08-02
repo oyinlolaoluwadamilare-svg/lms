@@ -160,13 +160,11 @@ export async function insertDeal(supabase: SupabaseClient, input: NewDealInput):
 }
 
 // docs/06-ui-spec.md's Pipeline screen names an "advanced filter set" that also includes "has no
-// next step" and "stage regression" - each still backed by an entity or column this repository
-// cannot honestly serve yet ("has no next step": tasks, M4+; "stage regression": a filter on
-// stage_events.is_regression, which exists since M2.1 but has no UI surface yet - a separate gap
-// from this one, not fixed here). "Days since last engagement" is no longer in that deferred list:
-// M3.7 populates and reads last_engaged_at for real. Filtering or sorting on a column that is null
-// for every row would look like a real feature while silently doing nothing - so the remaining two
-// are still scoped out, per CLAUDE.md's "do not start a milestone whose predecessor is incomplete."
+// next step" and "stage regression". "Has no next step" is no longer deferred: M4.7 implements it
+// below as noNextStep, now that M4.4's next_action_task_id derivation exists to honestly back it.
+// "Stage regression" remains out of scope here - a filter on stage_events.is_regression, which
+// exists since M2.1 but has no UI surface yet, a separate gap from this one. "Days since last
+// engagement" was the first of these three to stop being deferred, back in M3.7.
 export interface DealListFilters {
   stageId?: string;
   ownerId?: string;
@@ -182,6 +180,17 @@ export interface DealListFilters {
   // match a minimum-days filter, the same "null means never, not zero, but IS at least as stale as
   // any number" reasoning docs/04-metric-definitions.md's staleness bands definition already uses.
   minDaysSinceEngagement?: number;
+  // M4.7 (docs/07-build-backlog.md): "'No next step' filter... listing active deals lacking an open
+  // task." This is the exact complement of docs/04-metric-definitions.md's "Next-action coverage"
+  // metric ("Active deals with next_action_task_id is not null, over all active deals") - so, to
+  // stay true to that formula rather than inventing a looser one, setting this flag filters to
+  // status = 'active' AND next_action_task_id is null, not merely "next_action_task_id is null" on
+  // its own (a won/lost deal has no open task either, but that's an expected end state, not a
+  // gap needing attention). This matches migration 0005's own deals_no_next_action partial index
+  // (`where next_action_task_id is null and status = 'active'`) exactly, keeping the query
+  // index-backed. Combining this with an explicit, conflicting `status` filter (e.g. "won") is a
+  // contradiction that correctly yields zero rows rather than silently picking one side.
+  noNextStep?: boolean;
   // M3.7: the first sort control in the app (docs/06-ui-spec.md: "a last-engaged column and sort in
   // the table"). Scoped to this one column deliberately - there is no existing sort infrastructure
   // to extend, and no other column has been asked for yet; omitted, the table keeps its original
@@ -273,6 +282,7 @@ export async function listDeals(
     const cutoff = subtractDaysFromPlainDate(today, filters.minDaysSinceEngagement);
     query = query.or(`last_engaged_at.lte.${cutoff},last_engaged_at.is.null`);
   }
+  if (filters.noNextStep) query = query.eq("status", "active").is("next_action_task_id", null);
 
   // Default order is unchanged from M1.4 when no sort is requested. M3.7's "last-engaged... sort"
   // (docs/06-ui-spec.md) is the only sortable column so far - ascending means most-stale-first
@@ -343,6 +353,25 @@ export async function listDeals(
       daysSinceLastEngagement: row.last_engaged_at === null ? null : daysSincePlainDate(row.last_engaged_at, today),
     };
   });
+}
+
+// M4.7's dashboard tile (docs/07-build-backlog.md): "dashboard tile listing active deals lacking an
+// open task." A plain count, not a fetch of every row - the tile shows a number and a link through
+// to `/deals?noNextStep=1` for the actual list, so there is no need to pull every joined column
+// listDeals does. Relies purely on deals_select RLS for tenant/practice scoping, the same way
+// listDeals itself does (no explicit tenant_id filter) - a Director gets their own practice's
+// count, an Executive or tenant_admin gets the tenant-wide count, matching whatever the Pipeline
+// list itself would show them with the noNextStep filter applied.
+export async function countDealsWithoutNextAction(supabase: SupabaseClient): Promise<number> {
+  const { count, error } = await supabase
+    .from("deals")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "active")
+    .is("next_action_task_id", null)
+    .is("deleted_at", null);
+
+  if (error) throw new Error(`countDealsWithoutNextAction failed: ${error.message}`);
+  return count ?? 0;
 }
 
 export interface DealForAuthorization {

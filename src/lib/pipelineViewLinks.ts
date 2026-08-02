@@ -10,6 +10,7 @@ export interface PipelineSearchParams {
   closeTo?: string;
   view?: string;
   daysSinceEngagement?: string;
+  noNextStep?: string;
   sort?: string;
   dir?: string;
 }

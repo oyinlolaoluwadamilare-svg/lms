@@ -21,6 +21,12 @@ describe("viewToggleHref", () => {
   it("omits empty-string filter values rather than emitting a bare '='", () => {
     expect(viewToggleHref({ status: "", owner: "u1" }, "table")).toBe("/deals?owner=u1");
   });
+
+  // M4.7's "No next step" checkbox filter - just another param carried through the generic loop
+  // above, but named directly here so a maintainer doesn't have to infer it's covered.
+  it("preserves noNextStep=1 when switching views (M4.7)", () => {
+    expect(viewToggleHref({ noNextStep: "1" }, "board")).toBe("/deals?noNextStep=1&view=board");
+  });
 });
 
 // M3.7's "last-engaged column and sort" (docs/06-ui-spec.md) - the app's first sort control.
