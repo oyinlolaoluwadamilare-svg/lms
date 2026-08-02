@@ -10,7 +10,7 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
-   through task M1.7.
+   through task M1.8. **M1 — Deals and pipeline is complete.**
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -334,6 +334,48 @@ change, and confirmed both the updated detail page (weighted forecast recalculat
 the resulting `audit_entries` row (containing only the two fields that had actually changed)
 directly against the database. Full suite green: typecheck, lint, unit (80 tests), integration
 (29 tests, re-run twice to confirm idempotency), RLS (79 tests), e2e (11 tests).
+
+**M1.8** ⚑ (permission and RLS tests for every deal action, allow and deny, per role) is in place,
+closing out M1. Two new files, one per layer, both explicitly deferred by earlier milestones'
+own comments until this one:
+
+`tests/permissions/deal-matrix.spec.ts` exhaustively tests `can()` for all 13 `deal.*` actions
+across all 5 roles (65 combinations) against four resource shapes that cover every scope boundary
+`docs/02-permission-matrix.md`'s tokens name - a deal the actor owns, a colleague's deal in the same
+practice, a deal in a different practice, and a deal in a different tenant - with the expected
+outcome for each shape *independently re-derived* from the scope token(s) a role-action pair grants,
+not copied from `can()`'s own implementation (a circular test would prove nothing). Named cases on
+top of the generated table single out the most important specific facts this matrix encodes: `bde`
+can never change a deal's owner even on a deal they own themself (the one deal action where owning
+it isn't enough - `team_lead`/`director` can, even on a colleague's deal); only `director` and
+`tenant_admin` can override a stage gate; only `tenant_admin` can restore a soft-deleted deal; and
+executive is denied every write action on every resource shape while retaining tenant-wide view.
+
+`tests/rls/deals_permission_matrix.spec.ts` proves the same boundary at the database level -
+`deals_select`/`deals_update`/`deals_insert`, six identities (an owner, a same-practice colleague,
+`team_lead`, `director`, `executive`, `tenant_admin`) against three deals (own practice, a different
+practice in the same tenant, a different tenant). This surfaced the real asymmetry between reading
+and writing that D-02 names but this is the first place it's exhaustively proven: a `bde` reads
+their *whole* practice (`deals_select` has no owner check at all) but writes only their own
+(`deals_update`'s `bde` branch is `owner_id/author_id/is_deal_co_owner`, not practice-wide) - and a
+genuine, load-bearing architectural limitation, demonstrated rather than glossed over: migration
+0005's `deals_update` policy is *one* policy shared by every specific write action in the permission
+matrix (`change_stage`, `change_owner`, `mark_won`, `override_forecast_category`, ...) - it has no
+concept of "which column changed," only "may this identity write to this row at all." A dedicated
+test proves a `bde` who owns a deal **can** reassign its `owner_id` via a raw `UPDATE`, even though
+`docs/02-permission-matrix.md` says `bde`'s `deal.change_owner` is always denied - RLS is the coarse,
+row-level backstop; the fine-grained per-action distinction exists only in `can()`, which is exactly
+why `src/services/deals.ts`'s `changeStage`/`updateDeal` each call `can()` themselves rather than
+trusting `deals_update` alone (CLAUDE.md #1: RLS is a second, independent control, never the only
+one). Also confirms an `INSERT` policy violation behaves differently from a `SELECT`/`UPDATE` one -
+Postgres actively rejects the whole statement ("new row violates row-level security policy") rather
+than silently returning/affecting zero rows, which the test helper handles explicitly rather than
+mistaking a thrown error for an unrelated bug.
+
+Verified: both new files pass in full (70 and 20 tests respectively) alongside every existing suite
+- typecheck, lint, unit (150 tests total), RLS (99 tests total, all five files together), and a
+re-run of `test:integration` and the full Playwright e2e suite confirming this test-only milestone
+introduced no regressions anywhere else.
 
 ## Commands
 

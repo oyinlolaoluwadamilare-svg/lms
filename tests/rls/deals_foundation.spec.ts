@@ -6,8 +6,8 @@ import { asUser, migratorClient } from "./support";
 // deal_co_owners migrations with all constraints, including the active-deal-requires-owner-and-
 // close-date check." This is a baseline RLS proof for the new tables (docs/05-test-strategy.md's
 // rule: no table ships without one) - cross-tenant isolation, the constraint, and D-02's
-// practice-wide-read/own-write shape on deals. The FULL exhaustive per-role-action matrix for
-// deals is explicitly its own later milestone (M1.8, flagged ⚑) and is not duplicated here.
+// practice-wide-read/own-write shape on deals. The full exhaustive per-role-action matrix for
+// deals (M1.8, flagged ⚑) is not duplicated here - see tests/rls/deals_permission_matrix.spec.ts.
 
 let migrator: pg.Client;
 
