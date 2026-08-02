@@ -11,6 +11,7 @@ import {
   listMyWorkTasks,
   type TaskQueueItem,
 } from "@/data/tasks";
+import { insertTaskWatcher } from "@/data/taskWatchers";
 import { sendNotification } from "@/services/notifications";
 import {
   getUserByAuthId,
@@ -101,6 +102,14 @@ export async function assignTask(supabase: SupabaseClient, actor: Actor, taskId:
     entityId: taskId,
     title: "A task was assigned to you",
   });
+
+  // M4.9's automatic-watcher decision: reassignment adds the NEW assignee as a watcher. Additive
+  // only - the previous assignee (and anyone else already watching) stays a watcher too; there is
+  // no "unwatch" action (docs/02-permission-matrix.md's new footnote 4). Through the caller's own
+  // RLS-scoped session, not serviceClient - migration 0015's task_watchers_insert policy already
+  // permits this (the actor performing a reassignment necessarily has task-visibility), so there is
+  // no need for a service-role write here the way task_assignments/notifications require.
+  await insertTaskWatcher(supabase, taskId, newAssigneeId, actor.id);
 
   await writeAudit({
     tenantId: actor.tenantId,
@@ -216,6 +225,14 @@ export async function createTask(supabase: SupabaseClient, actor: Actor, input: 
       title: "A task was assigned to you",
     });
   }
+
+  // M4.9's automatic-watcher decision: a task's assignee AND assigner become watchers from
+  // creation. insertTaskWatcher's own upsert-ignore-duplicates makes the self-assigned case (both
+  // are the same person) a harmless single row, not a double-insert. Through the caller's own
+  // RLS-scoped session - migration 0015's task_watchers_insert policy already permits this for
+  // whoever just created the task.
+  await insertTaskWatcher(supabase, task.id, input.assigneeId, actor.id);
+  await insertTaskWatcher(supabase, task.id, actor.id, actor.id);
 
   await writeAudit({
     tenantId: actor.tenantId,

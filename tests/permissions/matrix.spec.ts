@@ -134,6 +134,61 @@ describe("named deny/allow cases (docs/02-permission-matrix.md, docs/05-test-str
     expect(can(bde, "task.assign_to_other", outsideAssignment)).toBe(false);
   });
 
+  // M4.9 (docs/07-build-backlog.md): "Comments, watchers and @mention with an in-scope user
+  // picker." task.watch shares task.comment's "visible" scope (assignee, assigner, or practice
+  // membership - watching is no more privileged than viewing).
+  it("bde can watch a task they are assigned to, or assigned by", () => {
+    const bde = actorWith("bde");
+    expect(can(bde, "task.watch", { tenantId: TENANT, practiceLineId: PRACTICE, assigneeId: bde.id })).toBe(true);
+    expect(can(bde, "task.watch", { tenantId: TENANT, practiceLineId: PRACTICE, assignedById: bde.id })).toBe(true);
+  });
+
+  it("bde can watch any task in their own practice line, even one neither assigned to nor by them", () => {
+    const bde = actorWith("bde");
+    const practicePeerTask = { tenantId: TENANT, practiceLineId: PRACTICE, assigneeId: "someone-else", assignedById: "someone-else-too" };
+    expect(can(bde, "task.watch", practicePeerTask)).toBe(true);
+  });
+
+  it("bde cannot watch a task outside their entitled practice line", () => {
+    const bde = actorWith("bde");
+    const outsideTask = { tenantId: TENANT, practiceLineId: OTHER_PRACTICE, assigneeId: "someone-else", assignedById: "someone-else-too" };
+    expect(can(bde, "task.watch", outsideTask)).toBe(false);
+  });
+
+  // task.add_watcher shares task.mention_user's exact practice/tenant scope shape - both are
+  // "pick another in-scope user" actions.
+  it("bde can add a practice-line peer as a watcher", () => {
+    const bde = actorWith("bde");
+    expect(can(bde, "task.add_watcher", { tenantId: TENANT, practiceLineId: PRACTICE })).toBe(true);
+  });
+
+  it("bde cannot add a watcher on a task outside their entitled practice line", () => {
+    const bde = actorWith("bde");
+    expect(can(bde, "task.add_watcher", { tenantId: TENANT, practiceLineId: OTHER_PRACTICE })).toBe(false);
+  });
+
+  // task.resolve_comment shares task.update's exact assigned_by/assigned scope shape - resolving
+  // feedback is treated as changing the task's own state, not a property of the comment's author.
+  it("bde can resolve a comment on a task they are assigned to, or assigned by", () => {
+    const bde = actorWith("bde");
+    expect(can(bde, "task.resolve_comment", { tenantId: TENANT, practiceLineId: PRACTICE, assigneeId: bde.id })).toBe(true);
+    expect(can(bde, "task.resolve_comment", { tenantId: TENANT, practiceLineId: PRACTICE, assignedById: bde.id })).toBe(true);
+  });
+
+  it("bde cannot resolve a comment on a practice peer's task they are neither assigned to nor by", () => {
+    const bde = actorWith("bde");
+    const practicePeerTask = { tenantId: TENANT, practiceLineId: PRACTICE, assigneeId: "someone-else", assignedById: "someone-else-too" };
+    expect(can(bde, "task.resolve_comment", practicePeerTask)).toBe(false);
+  });
+
+  it("team_lead and director can resolve any comment practice-wide; tenant_admin tenant-wide; executive never", () => {
+    const resource = { tenantId: TENANT, practiceLineId: PRACTICE, assigneeId: "someone-else", assignedById: "someone-else-too" };
+    expect(can(actorWith("team_lead"), "task.resolve_comment", resource)).toBe(true);
+    expect(can(actorWith("director"), "task.resolve_comment", resource)).toBe(true);
+    expect(can(actorWith("tenant_admin"), "task.resolve_comment", resource)).toBe(true);
+    expect(can(actorWith("executive"), "task.resolve_comment", resource)).toBe(false);
+  });
+
   it("executive cannot perform any write action, for every write action", () => {
     const executive = actorWith("executive");
     for (const action of WRITE_ACTIONS) {

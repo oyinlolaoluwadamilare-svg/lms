@@ -84,8 +84,25 @@ deal they own."* This single assertion would have caught the predecessor's most 
 | task.cancel | own_created | practice | practice | — | tenant |
 | task.comment | visible | visible | visible | — | visible |
 | task.mention_user | practice | practice | practice | — | tenant |
+| task.watch | visible | visible | visible | — | visible |
+| task.add_watcher | practice | practice | practice | — | tenant |
+| task.resolve_comment | own+assigned | practice | practice | — | tenant |
 
 ³ A BDE may assign to deal co-owners, their team lead, and practice-line peers.
+
+⁴ M4.9 additions, none named in the original matrix (`task_watchers`/`task_comments.resolved_at`
+shipped as schema in M4.1 with these three actions explicitly deferred to this milestone). Watchers
+are both automatic (a task's assignee and assigner are watchers from creation; reassignment adds the
+new assignee; an @mention adds the mentioned user) and manual: `task.watch` is self-add ("watch this
+task"), scoped identically to `task.comment` - the same "visible" population, since watching is no
+more privileged than viewing. `task.add_watcher` (adding someone ELSE) is scoped identically to
+`task.mention_user` - both are "pick another in-scope user" actions, so both use the same picker
+population and the same scope shape. `task.resolve_comment` is scoped identically to `task.update` -
+resolving feedback on a task is treated as changing the task's own state, not a property of the
+comment's original author, so the task's assignee/assigner (or a practice lead) may resolve a
+comment even if someone else wrote it. There is still no "remove watcher"/"unwatch" action - not
+named by this milestone, the same "not invented here" reasoning migration 0005's
+`deal_co_owners_insert` comment already gave for the analogous `deal.remove_co_owner` gap.
 
 ### Accounts and contacts
 | Action | bde | team_lead | director | executive | tenant_admin |

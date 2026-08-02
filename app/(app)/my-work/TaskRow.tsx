@@ -7,6 +7,7 @@ import { TASK_PRIORITY_LABELS, snoozeReasonRequired } from "@/domain/task";
 import type { AssignableUser, TaskQueueItem } from "@/services/tasks";
 import { addDaysToPlainDate, dateInTimezone, formatPlainDate } from "@/lib/dates";
 import { completeTaskAction, getReassignContextAction, reassignTaskAction, snoozeTaskAction } from "./taskActions";
+import { TaskCommentsDialog, type TaskCommentsDialogHandle } from "./TaskCommentsDialog";
 
 interface TaskRowProps {
   task: TaskQueueItem;
@@ -39,6 +40,8 @@ export function TaskRow({ task, viewerId, timezone, showAssignee }: TaskRowProps
   const [reassignLoading, setReassignLoading] = useState(false);
   const [reassignPending, setReassignPending] = useState(false);
   const [reassignError, setReassignError] = useState<string | null>(null);
+
+  const commentsDialogRef = useRef<TaskCommentsDialogHandle>(null);
 
   function today(): string {
     return dateInTimezone(new Date().toISOString(), timezone);
@@ -151,6 +154,13 @@ export function TaskRow({ task, viewerId, timezone, showAssignee }: TaskRowProps
           className="rounded-token border border-line px-2.5 py-1 text-xs font-medium text-ink outline-none hover:bg-raised focus-visible:ring-2 focus-visible:ring-accent"
         >
           Reassign
+        </button>
+        <button
+          type="button"
+          onClick={() => commentsDialogRef.current?.open()}
+          className="rounded-token border border-line px-2.5 py-1 text-xs font-medium text-ink outline-none hover:bg-raised focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          Comments
         </button>
         {task.dealId ? (
           <Link
@@ -294,6 +304,8 @@ export function TaskRow({ task, viewerId, timezone, showAssignee }: TaskRowProps
           </div>
         </form>
       </dialog>
+
+      <TaskCommentsDialog ref={commentsDialogRef} taskId={task.id} taskTitle={task.title} viewerId={viewerId} />
     </li>
   );
 }

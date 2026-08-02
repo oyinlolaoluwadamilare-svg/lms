@@ -190,3 +190,47 @@ once, respects the per-user opt-out, and never double-fires on a repeat sweep. `
 `assignTask`'s own pre-existing integration tests were re-run and confirmed unaffected, proving the
 new gate's default-on behaviour doesn't disturb either notification path when no preference row
 exists.
+
+`0015_task_watchers_and_comment_resolution` was applied to the hosted project the same way -
+forward/backward-tested locally first, then applied for real via the Management API (same
+no-raw-TCP-egress constraint as every migration since `0006`); `schema_migrations` there now lists
+`0001` through `0015`. Fills the two gaps migration 0011 deliberately left open and named explicitly
+as this milestone's own job: `task_watchers_insert` (mirrors `task_comments_insert`'s "visible"
+shape, minus the author-only restriction - RLS permits adding ANY in-scope-visible user as a
+watcher, the fine-grained "is this specific other user actually in scope" check living in
+`src/services/taskComments.ts`, the same split `createTask`'s own assignee re-check already
+established) and `task_comments_resolve` (scoped like `tasks_update`, not comment authorship -
+narrower than `task_comments_select`/`_insert`, which still include `executive`; resolving is
+denied for `executive` entirely).
+
+Three business-rule decisions with nothing in `docs/` to point to were made by explicit user choice,
+not guessed, and are recorded in `docs/02-permission-matrix.md`'s own new footnote 4: watchers are
+BOTH automatic (a task's assignee and assigner become watchers from creation, reassignment adds the
+new assignee, an @mention adds the mentioned user) AND manual (`task.watch` self-add,
+`task.add_watcher` add-someone-else); comment resolution is built now rather than deferred further,
+reusing the `resolved_at`/`resolved_by` columns migration 0011 already added but left unwired; there
+is still no "remove watcher"/"unwatch" action - not named by this milestone, the same "not invented
+here" reasoning migration 0005's `deal_co_owners_insert` comment already gave for the analogous
+`deal.remove_co_owner` gap. @mention itself is implemented as picking from the same in-scope
+picker population the assignee picker already uses (`listAssignableUsersForPractice`/`Tenant`), not
+by parsing `@handle` syntax out of free-text comment bodies - `src/services/taskComments.ts`'s own
+header comment has the full reasoning for why a picker satisfies "an in-scope user picker" literally
+rather than needing an invented markup format.
+
+Three new permission actions were added to `docs/02-permission-matrix.md` and
+`src/auth/permissions.ts` for the first time: `task.watch` (mirrors `task.comment`'s "visible"
+scope), `task.add_watcher` and `task.mention_user`'s own shape (both "pick another in-scope user",
+`practice`/`tenant`), and `task.resolve_comment` (mirrors `task.update`'s `assigned_by`/`assigned`
+scope). `tests/permissions/matrix.spec.ts` gained named positive/negative cases for all three, per
+CLAUDE.md's own permission-test rule.
+
+`tests/rls/tasks.spec.ts`'s own `task_watchers` describe block - previously pinning "no
+`authenticated` identity can add themselves as a watcher yet" as the correct M4.1-era behaviour - was
+rewritten to prove the new M4.9 behaviour instead (self-add, add-someone-else via practice
+visibility, cross-practice rejection, impersonation rejection via `added_by`), plus a new
+`task_comments_resolve` describe block. `tests/integration/task-comments.spec.ts` (12 tests, against
+the real hosted project) proves `createTask`'s own new auto-watch behaviour, `createTaskComment`'s
+@mention → watcher + notification side effects (including the self-mention-skips-notification and
+invalid-mention-is-rejected cases), `addWatcher`'s self/other paths, and `resolveTaskComment`'s
+task-state-not-authorship scoping (including the executive-denied-at-can()-level case) - all run
+against real signed-in sessions, not a service-role client.

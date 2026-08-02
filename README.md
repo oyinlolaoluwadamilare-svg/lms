@@ -1560,6 +1560,60 @@ fires once, respects the per-user opt-out, and never double-fires on a repeat sw
 Verified: typecheck, lint, unit (220, unchanged), RLS (230, 10 new), integration (119, 8 new), and
 the full Playwright e2e suite (11, unchanged) all green.
 
+**M4.9** (Comments, watchers and @mention with an in-scope user picker) is implemented and
+verified - the largest single M4.x slice so far, by explicit user direction: two follow-up
+questions surfaced real business-rule gaps neither `docs/01-domain-model.md` nor
+`docs/06-ui-spec.md` answered (how someone becomes a watcher; whether comment resolution belongs in
+this milestone at all), and the user chose the most complete option each time - both automatic and
+manual watchers, and building resolve/unresolve now rather than deferring it further.
+
+`@mention` is a picker, not free-text `@handle` parsing: the comment composer offers checkboxes over
+the same in-scope population the assignee picker already produces
+(`listAssignableUsersForPractice`/`Tenant`, matching `task.mention_user`'s own practice/tenant scope
+in the permission matrix) - satisfying "an in-scope user picker" literally, without inventing a
+markup/escaping format nobody asked for. Watchers are automatic (a task's assignee and assigner from
+creation, the new assignee on reassignment, an @mentioned user from a comment) AND manual
+(`task.watch` - self-add; `task.add_watcher` - add someone else, re-validated server-side against
+the same in-scope population, the identical "you can only pick who the picker offered" discipline
+`createTask`'s own assignee re-check already established). There is still no "unwatch" action -
+genuinely not named by this milestone. Comment resolution reuses `resolved_at`/`resolved_by`
+(migration 0011, left unwired until now) and is scoped like `task.update`, not comment authorship -
+a task's assignee/assigner (or a practice lead) can resolve feedback even if someone else wrote it.
+
+Three new permission actions (`task.watch`, `task.add_watcher`, `task.resolve_comment`) were added
+to `docs/02-permission-matrix.md` and `src/auth/permissions.ts`, each mirroring an existing action's
+exact scope shape rather than inventing a new one, with named positive/negative test cases added to
+`tests/permissions/matrix.spec.ts` per CLAUDE.md's own permission-test rule. New migration `0015`
+adds the two RLS policies migration 0011 deliberately deferred (`task_watchers_insert`,
+`task_comments_resolve`) - applied to the real hosted project via the Management API, the same
+no-raw-TCP-egress path every migration since `0006` has used. `tests/rls/tasks.spec.ts`'s own
+`task_watchers` test block, which previously pinned "no insert policy exists yet" as correct
+behaviour, was rewritten to prove the new M4.9 behaviour instead, plus a new `task_comments_resolve`
+block.
+
+New service layer: `src/data/taskComments.ts`, `src/data/taskWatchers.ts`,
+`src/services/taskComments.ts` (`getTaskCommentsContext`, `createTaskComment`, `resolveTaskComment`,
+`addWatcher`); `src/services/tasks.ts`'s `createTask`/`assignTask` gained the automatic-watcher
+wiring. New UI: no task-detail page exists anywhere in this codebase, so this follows the exact
+`<dialog>`-per-row idiom `TaskRow.tsx`'s own Snooze/Reassign dialogs and `AddTaskModal.tsx` already
+established - a new "Comments" button opens `TaskCommentsDialog.tsx`, showing watchers, the comment
+thread with per-comment resolve/unresolve, and a comment composer with the mention picker.
+
+New `tests/integration/task-comments.spec.ts` (12 tests, against the real hosted project, real
+signed-in sessions throughout): `createTask`'s auto-watch behaviour; posting a comment as anyone
+with task visibility; @mentioning an in-scope user adding them as a watcher AND sending a real
+"mentioned" notification (the first time that event type actually fires, since M4.8 built its
+preference plumbing with no trigger yet); mentioning yourself sending no notification; mentioning an
+out-of-scope user being rejected; `addWatcher`'s self/other paths, including the out-of-scope
+rejection; and `resolveTaskComment`'s task-state-not-authorship scoping, including an executive
+being denied at the `can()` level before RLS is ever reached. Manual browser QA (real dev server,
+real hosted project, the existing dedicated QA tenant) confirmed the Comments dialog end to end:
+watchers list, mention checkboxes, posting a comment that correctly added the mentioned user as a
+watcher, and both the resolve and unresolve toggle.
+
+Verified: typecheck, lint, unit (228, 8 new), RLS (236, 6 new), integration (131, 12 new), and the
+full Playwright e2e suite (11, unchanged) all green.
+
 ## Commands
 
 ```

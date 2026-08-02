@@ -38,6 +38,9 @@ export const ACTIONS = [
   "task.cancel",
   "task.comment",
   "task.mention_user",
+  "task.watch",
+  "task.add_watcher",
+  "task.resolve_comment",
   // Accounts and contacts
   "account.view",
   "account.create",
@@ -163,6 +166,9 @@ const DEAL: Record<Action, PermissionEntry> = {
   "task.cancel": ["assigned_by"],
   "task.comment": ["assigned_by", "assigned", "practice"], // "visible" = same set as task.view
   "task.mention_user": ["practice"],
+  "task.watch": ["assigned_by", "assigned", "practice"], // "visible" = same set as task.comment
+  "task.add_watcher": ["practice"], // same shape as task.mention_user - both "pick another in-scope user"
+  "task.resolve_comment": ["assigned_by", "assigned"], // same shape as task.update
   "account.view": ["practice"],
   "account.create": ["practice"],
   "account.update": ["practice"],
@@ -232,6 +238,9 @@ const TEAM_LEAD: Record<Action, PermissionEntry> = {
   "task.cancel": ["practice"],
   "task.comment": ["practice"],
   "task.mention_user": ["practice"],
+  "task.watch": ["practice"],
+  "task.add_watcher": ["practice"],
+  "task.resolve_comment": ["practice"],
   "account.create": ["practice"],
   "account.update": ["practice"],
   "contact.create": ["practice"],
@@ -296,6 +305,9 @@ const EXECUTIVE: Record<Action, PermissionEntry> = {
   "task.cancel": null,
   "task.comment": null,
   "task.mention_user": null,
+  "task.watch": null,
+  "task.add_watcher": null,
+  "task.resolve_comment": null,
   "account.view": ["tenant"],
   "account.create": null,
   "account.update": null,
@@ -366,6 +378,9 @@ const TENANT_ADMIN: Record<Action, PermissionEntry> = {
   "task.cancel": ["tenant"],
   "task.comment": ["tenant"],
   "task.mention_user": ["tenant"],
+  "task.watch": ["tenant"],
+  "task.add_watcher": ["tenant"],
+  "task.resolve_comment": ["tenant"],
   "account.view": ["tenant"],
   "account.create": ["tenant"],
   "account.update": ["tenant"],

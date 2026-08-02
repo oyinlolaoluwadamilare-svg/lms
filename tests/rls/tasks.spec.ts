@@ -553,7 +553,13 @@ describe("task_comments: task.comment is 'visible' for both read and write - the
   });
 });
 
-describe("task_watchers: select-only for now - no 'add watcher' action exists in the permission matrix yet", () => {
+// M4.9 (docs/07-build-backlog.md): "Comments, watchers and @mention with an in-scope user picker."
+// task_watchers_insert (migration 0015) mirrors task_comments_insert's own "visible" shape, minus
+// the author_id=auth.uid() restriction (added_by=auth.uid() is still enforced, but the WATCHED
+// user_id can be anyone - RLS cannot verify a SECOND person's own role, so the fine-grained "is this
+// other user actually in scope" check is src/services/taskComments.ts's job, the same
+// "you can only pick who the picker offered" split createTask's own assignee re-check established).
+describe("task_watchers: visible-scoped insert as of M4.9 (migration 0015), same audience as task_comments", () => {
   it("the task's own assignee can see who is watching it", async () => {
     const { rows: task } = await migrator.query(
       `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
@@ -567,18 +573,130 @@ describe("task_watchers: select-only for now - no 'add watcher' action exists in
     expect(rows.length).toBeGreaterThan(0);
   });
 
-  it("no `authenticated` identity can add themselves as a watcher yet", async () => {
+  it("the task's own assignee can add themselves as a watcher", async () => {
     const { rows: task } = await migrator.query(
       `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
-       values ($1, $2, 'No self-watch yet', $3, $3, current_date) returning id`,
-      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+       values ($1, $2, 'Self-watch', $3, $4, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1, ids.teamLeadA],
     );
     const client = await asUser(ids.bdeA1);
-    const inserted = await tryInsert(client, "insert into task_watchers (task_id, user_id) values ($1, $2)", [
+    const inserted = await tryInsert(client, "insert into task_watchers (task_id, user_id, added_by) values ($1, $2, $2)", [
       task[0].id,
       ids.bdeA1,
     ]);
     await client.end();
+    expect(inserted).toBe(true);
+  });
+
+  it("a same-practice colleague (visible via practice) can add someone else as a watcher too", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'Watcher added by a practice peer', $3, $3, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+    );
+    const client = await asUser(ids.bdeA2);
+    const inserted = await tryInsert(
+      client,
+      "insert into task_watchers (task_id, user_id, added_by) values ($1, $2, $3)",
+      [task[0].id, ids.teamLeadA, ids.bdeA2],
+    );
+    await client.end();
+    expect(inserted).toBe(true);
+  });
+
+  it("a bde outside the deal's practice cannot see the task or add a watcher to it", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'Not visible outside practice', $3, $3, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+    );
+    const client = await asUser(ids.otherPracticeUser);
+    const { rows: seen } = await client.query("select task_id from task_watchers where task_id = $1", [task[0].id]);
+    const inserted = await tryInsert(
+      client,
+      "insert into task_watchers (task_id, user_id, added_by) values ($1, $2, $2)",
+      [task[0].id, ids.otherPracticeUser],
+    );
+    await client.end();
+    expect(seen).toHaveLength(0);
     expect(inserted).toBe(false);
+  });
+
+  it("cannot add a watcher impersonating a different added_by", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'No impersonation', $3, $3, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+    );
+    const client = await asUser(ids.bdeA1);
+    const inserted = await tryInsert(
+      client,
+      "insert into task_watchers (task_id, user_id, added_by) values ($1, $2, $3)",
+      [task[0].id, ids.teamLeadA, ids.teamLeadA],
+    );
+    await client.end();
+    expect(inserted).toBe(false);
+  });
+});
+
+// task_comments_resolve (migration 0015) - scoped like tasks_update (task.resolve_comment's own
+// shape), narrower than task_comments_select/_insert's own visibility-only shape: a practice peer
+// with mere visibility, unlike the assignee/assigner/a lead, cannot resolve someone else's comment.
+describe("task_comments_resolve: assigned_by/assigned for bde, practice for team_lead/director, denied for executive", () => {
+  it("the task's own assignee can resolve a comment on it", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'Resolvable by assignee', $3, $4, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1, ids.teamLeadA],
+    );
+    const { rows: comment } = await migrator.query(
+      "insert into task_comments (task_id, author_id, body) values ($1, $2, 'Please check') returning id",
+      [task[0].id, ids.teamLeadA],
+    );
+    const client = await asUser(ids.bdeA1);
+    const result = await client.query("update task_comments set resolved_at = now(), resolved_by = $2 where id = $1", [
+      comment[0].id,
+      ids.bdeA1,
+    ]);
+    await client.end();
+    expect(result.rowCount).toBe(1);
+  });
+
+  it("a practice peer with mere visibility (neither assignee, assigner, nor a lead) cannot resolve a comment", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'Not resolvable by a peer', $3, $3, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+    );
+    const { rows: comment } = await migrator.query(
+      "insert into task_comments (task_id, author_id, body) values ($1, $2, 'Visible but not resolvable') returning id",
+      [task[0].id, ids.bdeA1],
+    );
+    const client = await asUser(ids.bdeA2);
+    const result = await client.query("update task_comments set resolved_at = now(), resolved_by = $2 where id = $1", [
+      comment[0].id,
+      ids.bdeA2,
+    ]);
+    await client.end();
+    expect(result.rowCount).toBe(0);
+  });
+
+  it("a director can resolve any comment practice-wide, even one they neither authored nor were assigned", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'Resolvable by a director', $3, $3, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+    );
+    const { rows: comment } = await migrator.query(
+      "insert into task_comments (task_id, author_id, body) values ($1, $2, 'Director can resolve') returning id",
+      [task[0].id, ids.bdeA1],
+    );
+    const client = await asUser(ids.directorA);
+    const result = await client.query("update task_comments set resolved_at = now(), resolved_by = $2 where id = $1", [
+      comment[0].id,
+      ids.directorA,
+    ]);
+    await client.end();
+    expect(result.rowCount).toBe(1);
   });
 });
