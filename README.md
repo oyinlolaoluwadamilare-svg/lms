@@ -1021,6 +1021,62 @@ attachment, confirming it renders in the timeline with a working download contro
 `window.open` fix) confirmed correct behaviour with no console errors beyond the pre-existing,
 unrelated missing-favicon 404 already noted in M3.6's own entry.
 
+**M3.9** ⚑ is a pure test-suite milestone - no application code changes - closing the two gaps a
+research pass found in what M3.6/M3.7/M3.8's own work had already covered vs. left open, rather than
+re-testing what already existed.
+
+`tests/unit/dates.spec.ts` already had a WAT-crossing-midnight case for every timezone-resolving
+function (`dateInTimezone`, `daysBetweenInTimezone`, `formatDateInTimezone`), including
+`daysBetweenInTimezone`'s own comment literally citing this milestone by name, plus a negative-offset
+(`America/Los_Angeles`) counterpart. `formatPlainDate`/`daysSincePlainDate`/`subtractDaysFromPlainDate`
+correctly have no such test - they take no timezone argument at all, by design (`docs/04-metric-
+definitions.md`-adjacent DATE columns like `activity_date`/`last_engaged_at` have no time-of-day to
+resolve). None of this needed touching again.
+
+What was genuinely missing, per `docs/05-test-strategy.md`'s own "Time and locale tests" section
+("every date-sensitive test runs against a user in Africa/Lagos **and** a user in a negative-offset
+timezone... an activity logged at 23:30 WAT shows the correct local date... `activity_date` and
+`created_at` are never conflated in any response"): every existing integration/RLS test computed
+`activityDate` from the real wall clock in `Africa/Lagos` only, so nothing proved the actual
+**accept/reject boundary** in `logActivity`'s future-date check moves with the timezone (as opposed
+to a pure-function primitive being individually correct), in either direction, against the real
+hosted project - and nothing anywhere asserted the "never conflated with `created_at`" half of the
+invariant with a case where the two dates actually differ.
+
+New `tests/integration/timezone.spec.ts` (3 tests) closes both, using `logActivity`'s existing
+injectable `now` parameter for a deterministic historical instant rather than depending on real wall-
+clock timing:
+
+1. 23:30 UTC on 14 June 2024 is already 00:30 on 15 June in Africa/Lagos (WAT, UTC+1) - CLAUDE.md
+   #8's own named example. A UTC-based "today" would wrongly reject `activityDate = "2024-06-15"` as
+   future; the correct WAT-based "today" must accept it. Asserted directly against the real
+   `logActivity` call, not merely the underlying `dateInTimezone` primitive.
+2. The mirror image with a negative-offset zone (`America/Los_Angeles`, UTC-7): 02:00 UTC on 15 June
+   is still 19:00 on 14 June there, so an `activityDate` of "2024-06-15" (today in UTC) must be
+   *rejected* as a future date for this actor, even though it is not in the future in UTC.
+3. A deliberately backdated activity (`activityDate = "2024-01-01"`, `created_at` genuinely months
+   later, confirmed via an independent service-role read before asserting anything - otherwise a
+   coincidental match would make the test vacuous) proves `listActivitiesForDeal` and
+   `getEngagementTimeline` both surface `activityDate` correctly and expose no `createdAt`/`created_at`
+   field at all; `sortInstant` (the one place a DATE and an instant are ever combined, purely as an
+   internal sort key - `engagementTimeline.ts`'s own comment) is confirmed still derived from
+   `activityDate`, never from `created_at`.
+
+No e2e (Playwright) equivalent: this container's browser tests have no service-role credentials to
+control a precise clock or seed a precisely-timestamped row, the same documented limitation
+`tests/e2e/pipeline.spec.ts`'s own comment already gives for why equivalent coverage lives in
+integration tests instead of a real browser round trip.
+
+This completes **M3** - docs/07-build-backlog.md's own exit criteria: every writing role can log an
+engagement in three interactions (M3.4); the timeline is complete (M3.5), append-only (M3.1/M3.6) and
+tamper-evident (M3.3's named RLS regression test, `activity_revisions`' immutability); staleness is
+visible everywhere (M3.7).
+
+Verified: typecheck, lint (unchanged), unit (206, unchanged - no `dates.ts` changes needed), RLS
+(178, unchanged), integration (69 total, 3 new, against the real hosted project, run twice
+consecutively), and the full Playwright e2e suite (11, unchanged) all green. No UI changed, so no
+manual browser QA was needed for this milestone.
+
 ## Commands
 
 ```
