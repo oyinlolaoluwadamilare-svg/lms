@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import type { TaskPriority } from "@/domain/task";
 
 export interface TaskForAuthorization {
   id: string;
@@ -70,10 +71,55 @@ export async function applyTaskReassignment(supabase: SupabaseClient, taskId: st
   if (error) throw new Error(`applyTaskReassignment failed: ${error.message}`);
 }
 
+export interface NewTaskInput {
+  tenantId: string;
+  dealId: string | null;
+  originActivityId: string | null;
+  title: string;
+  description: string | null;
+  assigneeId: string;
+  assignedBy: string;
+  dueDate: string; // YYYY-MM-DD
+  priority: TaskPriority;
+}
+
+export interface InsertedTask {
+  id: string;
+}
+
+// The only place application code inserts into tasks - called exclusively by
+// src/services/tasks.ts's createTask (docs/07-build-backlog.md M4.3). Reads/writes through the
+// CALLER's own RLS-scoped session (tasks_insert, migration 0011) - there IS an insert policy for
+// `authenticated` on this table, the same shape insertActivity's own comment already establishes for
+// why no service-role client is needed here. `status` is left to its column default ('open') and
+// `assigned_by` is always the creating actor themselves at creation time - a task can only ever be
+// created with the creator as its own first assigner, never on someone else's behalf.
+export async function insertTask(supabase: SupabaseClient, input: NewTaskInput): Promise<InsertedTask> {
+  const { data, error } = await supabase
+    .from("tasks")
+    .insert({
+      tenant_id: input.tenantId,
+      deal_id: input.dealId,
+      origin_activity_id: input.originActivityId,
+      title: input.title,
+      description: input.description,
+      assignee_id: input.assigneeId,
+      assigned_by: input.assignedBy,
+      due_date: input.dueDate,
+      priority: input.priority,
+    })
+    .select("id")
+    .single();
+
+  if (error) throw new Error(`insertTask failed: ${error.message}`);
+  return { id: (data as unknown as { id: string }).id };
+}
+
 // task_assignments is the immutable reassignment ledger (migration 0011: forbid_mutation trigger,
 // no insert policy for `authenticated` at all) - every write goes through a service-role client, the
 // same shape retractActivityRow/writeAudit already use for privileged single-path writes.
-// fromUserId is nullable only for a task's very first assignment at creation time; every call from
+// fromUserId is nullable for exactly one caller, createTask's own first-assignment row (the domain
+// model's own words: "the very first assignment at task creation has no 'from'") - every call from
 // assignTask (reassignment of an existing task) always has a real previous assignee.
 export async function insertTaskAssignment(
   serviceClient: SupabaseClient,

@@ -11,7 +11,9 @@ import { logActivitySchema } from "./logActivitySchema";
 // writes (src/services/documents.ts's own comment). A failed attachment (too large, wrong type,
 // etc.) is surfaced back to the modal as a warning on an otherwise-successful save, never silently
 // dropped and never treated as if the whole log-activity action failed.
-export type LogActivityActionResult = { ok: true; attachmentWarning?: string } | { ok: false; message: string };
+// activityId is always returned on success - "Save and add task" (M4.3, LogActivityModal.tsx) needs
+// it as the new task's origin_activity_id, carrying the just-saved activity's context forward.
+export type LogActivityActionResult = { ok: true; activityId: string; attachmentWarning?: string } | { ok: false; message: string };
 
 function describeAttachError(fileName: string, code: "not_found" | "denied" | "retracted" | "too_large" | "type_not_allowed"): string {
   switch (code) {
@@ -96,7 +98,7 @@ export async function logActivityAction(
   }
 
   if (attachmentErrors.length > 0) {
-    return { ok: true, attachmentWarning: `Activity saved, but: ${attachmentErrors.join("; ")}` };
+    return { ok: true, activityId: result.activity.id, attachmentWarning: `Activity saved, but: ${attachmentErrors.join("; ")}` };
   }
-  return { ok: true };
+  return { ok: true, activityId: result.activity.id };
 }

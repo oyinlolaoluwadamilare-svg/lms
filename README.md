@@ -1222,6 +1222,77 @@ M4.3+) all green. Migration `0012_notifications` tested forward and backward aga
 before being applied for real; `schema_migrations` on the hosted project now lists `0001` through
 `0012`.
 
+**M4.3** (Add Task modal with the scope-filtered assignee picker; "Save and add task" continuation
+from the activity modal) is implemented and verified. No new migration - this is the `createTask`
+application/UI layer on top of migrations 0011/0012.
+
+`createTask` (`src/services/tasks.ts`) is the single task-creation path, mirroring `logActivity`'s
+shape: `task.create` gates whether the actor may create a task in this deal's practice at all,
+`task.assign_to_self`/`task.assign_to_other` gate the chosen assignee. **A real permission bug was
+found and fixed while building this**, not just a documentation nuance: `can()`'s `tokenMatches`
+only ever validates the ACTOR's own role against a resource - it has no way to check a SECOND
+person's (the assignee's) own role, since `Resource` carries no "the target's own practice_line_id"
+field. An early version of this function assumed footnote 3 on `task.assign_to_other` ("co-owners,
+own team lead, practice peers") reduced to plain practice membership and could be left to `can()`
+alone; the integration test written for the "assign to someone outside the practice" case caught
+that this actually let a bde assign a brand-new task to a user in a **completely different**
+practice line, because `can()` was silently only ever checking the actor's side of the relationship.
+Fixed by re-validating the chosen assignee against `listAssignableUsersForPractice` (the identical
+query the picker itself uses) - "you can only pick who the picker offered" is now actually true
+server-side, not just a UI convention (CLAUDE.md #1). **The same, already-disclosed gap in M4.2's
+`assignTask` was closed with the identical fix**, since reassigning an existing task to an
+out-of-scope user is no safer than creating one already pointed at them - both functions now defer
+to the same `listAssignableUsersForPractice` query for this check, and both correctly order it
+*after* the real-active-same-tenant-user existence check, so a nonexistent id still reads as
+`invalid_assignee` rather than a misleading `denied`. For a deal-less personal task (no practice to
+check against), this re-check is skipped entirely - the same relaxed shape migration 0011's
+`tasks_insert` RLS policy already documents ("any practice-scoped writer may create one").
+
+`src/data/users.ts` gained `listAssignableUsersForPractice`/`listAssignableUsersForTenant`: active,
+non-deleted users holding a working role (bde/team_lead/director) in the given practice, plus any
+`tenant_admin` - `executive` is deliberately excluded, since every `task.*` action that would let
+them DO anything with an assigned task (`task.complete`/`task.update`) is null for that role. A task
+assigned to a self-assigning actor always sends no notification ("Assigning to someone else surfaces
+'They will be notified'" - docs/06-ui-spec.md implies the self-assign case doesn't); assigning to
+someone else sends a real `task_assigned` notification via the same service-role path M4.2's
+`assignTask` already established for `task_reassigned`.
+
+**"Save and add task"** (LogActivityModal.tsx) is built as an embedded `AddTaskModal` instance
+(`showTrigger=false`, opened imperatively via a `forwardRef`/`useImperativeHandle` handle) rather
+than shared global state - each `LogActivityModal` usage on the deal page owns its own continuation,
+so there's no cross-component context to wire up. `logActivityAction`'s result gained `activityId`
+so the continuation can carry the just-saved activity's id forward as the new task's
+`origin_activity_id`, literally "carrying the context forward" per the UI spec's own words.
+
+Narrower than the full UI spec in ways flagged in code rather than silently built: no avatar image
+in the assignee picker (no avatar system exists anywhere in this codebase yet, the same gap
+`LogActivityModal`'s own "type icon" comment already names); no deal picker (`AddTaskModal` only
+ever reaches the deal detail page, so "linked deal" is always that page's own deal - a deal-less/
+global "Add Task" entry point belongs to M4.5's My Work screen, which doesn't exist yet).
+
+New `tests/integration/create-task.spec.ts` (11 tests, against the real hosted project): a bde
+self-assigns a task (ledger row, audit row, **no** notification); a bde assigns to a practice peer
+(a real `task_assigned` notification); a bde is denied assigning to someone outside their practice
+(the bug fix above, caught for real); an executive is denied creating a task at all; a director
+outside the practice can't even see the deal (`not_found`); a nonexistent assignee id is
+`invalid_assignee`; a deal-less personal task can be self-assigned by any practice-scoped writer;
+`origin_activity_id` carries forward correctly; and `getAddTaskContext`'s picker is verified to
+offer only the deal's own practice plus tenant-wide roles, correctly empty for an executive or a
+cross-practice director. `tests/integration/assign-task.spec.ts` (M4.2's own suite) re-verified green
+after the same fix was applied there. `tests/unit/dates.spec.ts` gained 4 tests for the new
+`addDaysToPlainDate` helper (the Add Task modal's "tomorrow"/"next week" quick due-date options).
+
+Manual browser QA (real dev server, real hosted project, a fresh Chromium session): the standalone
+"Add Task" button creates a self-assigned task with the correct default due date; the "Tomorrow"
+quick option sets the right date; switching the assignee to a practice peer shows "They will be
+notified."; "Save and add task" from the Log Activity modal correctly closes that modal and opens
+Add Task pre-filled with the deal's context, and the resulting task's `origin_activity_id` matches
+the just-logged activity - all verified against real database rows, not just UI appearance.
+
+Verified: typecheck, lint, unit (210, 4 new), RLS (220, unchanged), integration (88, 11 new for
+createTask/getAddTaskContext - `assignTask`'s own pre-existing 8 re-verified green after the
+permission fix), and the full Playwright e2e suite (11, unchanged) all green.
+
 ## Commands
 
 ```

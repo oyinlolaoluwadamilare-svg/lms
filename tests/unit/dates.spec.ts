@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addDaysToPlainDate,
   dateInTimezone,
   daysBetweenInTimezone,
   daysSincePlainDate,
@@ -138,6 +139,24 @@ describe("subtractDaysFromPlainDate", () => {
   it("round-trips with daysSincePlainDate: N days before today is exactly N days since", () => {
     const cutoff = subtractDaysFromPlainDate("2026-03-09", 30);
     expect(daysSincePlainDate(cutoff, "2026-03-09")).toBe(30);
+  });
+});
+
+describe("addDaysToPlainDate", () => {
+  it("adds whole days within the same month - the Add Task modal's 'tomorrow' quick option", () => {
+    expect(addDaysToPlainDate("2026-03-09", 1)).toBe("2026-03-10");
+  });
+
+  it("adds a full week forward - the 'next week' quick option", () => {
+    expect(addDaysToPlainDate("2026-03-09", 7)).toBe("2026-03-16");
+  });
+
+  it("crosses a month boundary forwards", () => {
+    expect(addDaysToPlainDate("2026-02-28", 1)).toBe("2026-03-01");
+  });
+
+  it("is the exact inverse of subtractDaysFromPlainDate", () => {
+    expect(addDaysToPlainDate(subtractDaysFromPlainDate("2026-03-09", 5), 5)).toBe("2026-03-09");
   });
 });
 

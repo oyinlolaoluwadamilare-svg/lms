@@ -88,6 +88,14 @@ export function subtractDaysFromPlainDate(date: string, days: number): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+// The Add Task modal's due-date quick options (docs/06-ui-spec.md: "today, tomorrow, next week,
+// custom") need the opposite direction from subtractDaysFromPlainDate - a thin wrapper rather than
+// a second arithmetic implementation, so there is exactly one place that does plain-date Date.UTC
+// math.
+export function addDaysToPlainDate(date: string, days: number): string {
+  return subtractDaysFromPlainDate(date, -days);
+}
+
 // A human-readable rendering of a stage_events.duration_in_previous_seconds value - whole days once
 // it's at least one, else whole hours, else whole minutes, else "under a minute". Presentational
 // only (how to phrase a number of seconds), not an analytic metric formula - docs/04-metric-

@@ -7,10 +7,12 @@ import { getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
 import { canLogActivity, canRetractActivity } from "@/services/activities";
 import { getEngagementTimeline, type TimelineFilters as TimelineFilterValues } from "@/services/engagementTimeline";
+import { getAddTaskContext } from "@/services/tasks";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
+import { AddTaskModal } from "./AddTaskModal";
 import { AttachmentLink } from "./AttachmentLink";
 import { EditActivityModal } from "./EditActivityModal";
 import { LogActivityModal } from "./LogActivityModal";
@@ -58,12 +60,13 @@ export default async function DealDetailPage({
   // engagement timeline reads through the same session (activities_select/stage_events_select) -
   // if the deal itself is invisible to this actor, this comes back empty rather than erroring,
   // which the early return below makes moot anyway.
-  const [deal, editView, timeline, canLog, canRetract] = await Promise.all([
+  const [deal, editView, timeline, canLog, canRetract, addTaskContext] = await Promise.all([
     getDealDetail(supabase, id, timezone),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
     getEngagementTimeline(supabase, id, timelineFilters),
     session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
     session.status === "active" ? canRetractActivity(supabase, session.actor, id) : false,
+    session.status === "active" ? getAddTaskContext(supabase, session.actor, id) : { canAddTask: false, assignableUsers: [] },
   ]);
   const currentActorId = session.status === "active" ? session.actor.id : null;
 
@@ -85,7 +88,18 @@ export default async function DealDetailPage({
             </span>
           </div>
           <div className="flex items-center gap-2">
-            {canLog ? <LogActivityModal dealId={deal.id} timezone={timezone} /> : null}
+            {canLog ? (
+              <LogActivityModal
+                dealId={deal.id}
+                timezone={timezone}
+                actorId={currentActorId ?? undefined}
+                canAddTask={addTaskContext.canAddTask}
+                assignableUsers={addTaskContext.assignableUsers}
+              />
+            ) : null}
+            {addTaskContext.canAddTask && currentActorId ? (
+              <AddTaskModal dealId={deal.id} timezone={timezone} actorId={currentActorId} assignableUsers={addTaskContext.assignableUsers} />
+            ) : null}
             {editView?.canEdit ? (
               <Link
                 href={`/deals/${deal.id}/edit`}
@@ -100,11 +114,12 @@ export default async function DealDetailPage({
         <p className="text-sm text-muted">{deal.account.name}</p>
       </header>
 
-      {/* Deliberately no next-action strip, most primary action buttons (Add Task, Advance Stage,
-          Mark Won/Lost, Escalate, Add Contact), stakeholders or open tasks here -
+      {/* Deliberately no next-action strip, stakeholders or open-tasks list here -
           docs/06-ui-spec.md's full Deal detail spec includes all of these, but every one depends on
-          an entity or action that doesn't exist yet (tasks: M4+; mark won/lost: M5.2-M5.3). Log
-          Activity (M3.4), Edit Deal (M1.7) and the last-engaged chip (M3.7) are what now exist. The
+          an entity or derivation that doesn't exist yet (next_action_task_id: M4.4; stakeholders:
+          M5.5's contacts). Log Activity (M3.4), Add Task (M4.3), Edit Deal (M1.7) and the
+          last-engaged chip (M3.7) are what now exist; Advance Stage, Mark Won/Lost, Escalate and Add
+          Contact are still missing (M2.2's board drag already moves stage; the rest is M5+). The
           engagement timeline below (M3.5/M3.6) supersedes M2.4's narrower stage-history-only panel,
           merging it with the activities this modal writes - see its own section comment for what of
           the full spec is still deliberately missing (attributed contacts). Otherwise this is the
@@ -189,7 +204,13 @@ export default async function DealDetailPage({
             <p className="text-sm text-muted">Log the first conversation.</p>
             {canLog ? (
               <div className="mt-2">
-                <LogActivityModal dealId={deal.id} timezone={timezone} />
+                <LogActivityModal
+                  dealId={deal.id}
+                  timezone={timezone}
+                  actorId={currentActorId ?? undefined}
+                  canAddTask={addTaskContext.canAddTask}
+                  assignableUsers={addTaskContext.assignableUsers}
+                />
               </div>
             ) : null}
           </div>

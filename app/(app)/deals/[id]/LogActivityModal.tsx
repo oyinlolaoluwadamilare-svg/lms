@@ -10,7 +10,9 @@ import {
   type ActivityType,
   type OutcomeDisposition,
 } from "@/domain/activity";
+import type { AssignableUser } from "@/services/tasks";
 import { dateInTimezone } from "@/lib/dates";
+import { AddTaskModal, type AddTaskModalHandle } from "./AddTaskModal";
 import { logActivityAction } from "./logActivityActions";
 
 const DEFAULT_TYPE: ActivityType = "call";
@@ -23,12 +25,28 @@ const DEFAULT_TYPE: ActivityType = "call";
 // input, so it never hijacks normal typing elsewhere on the page.
 //
 // Deliberately missing, per docs/06-ui-spec.md's own field list, but not buildable yet: the
-// "contacts present" optional field (contacts don't exist until M5.5) and the secondary "Save and
-// add task" button (Add Task modal is M4). Building either now would show a control with nothing
-// real behind it - the same reasoning every other narrower-than-spec vertical slice this session
-// has taken. "Attachments" (M3.8) is built - a plain multi-file input alongside outcome/disposition
-// in the same collapsed-by-default section.
-export function LogActivityModal({ dealId, timezone }: { dealId: string; timezone: string }) {
+// "contacts present" optional field (contacts don't exist until M5.5) - the same reasoning every
+// other narrower-than-spec vertical slice this session has taken. "Attachments" (M3.8) is built - a
+// plain multi-file input alongside outcome/disposition in the same collapsed-by-default section.
+// The secondary "Save and add task" button (M4.3) is built here as an embedded AddTaskModal
+// (showTrigger=false, opened imperatively) rather than a separate component the caller has to wire
+// up itself - "carries the context forward" (docs/06-ui-spec.md) means the just-created activity's
+// id becomes the new task's origin_activity_id, which only this component knows at the moment of
+// save. Hidden entirely when the actor can't add tasks on this deal (canAddTask), the same
+// boolean-gated-visibility shape every other role-conditional action in this codebase already uses.
+export function LogActivityModal({
+  dealId,
+  timezone,
+  actorId,
+  canAddTask = false,
+  assignableUsers = [],
+}: {
+  dealId: string;
+  timezone: string;
+  actorId?: string;
+  canAddTask?: boolean;
+  assignableUsers?: AssignableUser[];
+}) {
   const router = useRouter();
   // Renders twice on the same page when the timeline is empty (header button + empty-state
   // button, app/(app)/deals/[id]/page.tsx) - a static id would collide across both instances
@@ -37,6 +55,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
   const idPrefix = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const summaryRef = useRef<HTMLTextAreaElement>(null);
+  const addTaskRef = useRef<AddTaskModalHandle>(null);
 
   const [type, setType] = useState<ActivityType>(DEFAULT_TYPE);
   const [activityDate, setActivityDate] = useState("");
@@ -83,12 +102,15 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function handleSave() {
-    if (pending) return;
+  // Shared by both "Save activity" and "Save and add task" - only the post-save behaviour differs
+  // (close outright vs. hand off to the embedded AddTaskModal), so the save itself is one path, not
+  // two copies of the same validation/action-call/refresh sequence.
+  async function saveActivity(): Promise<{ ok: true; activityId: string } | { ok: false }> {
+    if (pending) return { ok: false };
     if (summary.trim().length === 0) {
       setError("Summary is required");
       summaryRef.current?.focus();
-      return;
+      return { ok: false };
     }
     setPending(true);
     setError(null);
@@ -108,7 +130,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
     setPending(false);
     if (!result.ok) {
       setError(result.message);
-      return;
+      return { ok: false };
     }
     router.refresh();
     if (result.attachmentWarning) {
@@ -116,9 +138,21 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
       // show which attachment(s) didn't make it, rather than closing over a silent partial
       // failure the user would only discover later on the timeline.
       setError(result.attachmentWarning);
-      return;
+      return { ok: false };
     }
+    return { ok: true, activityId: result.activityId };
+  }
+
+  async function handleSave() {
+    const result = await saveActivity();
+    if (result.ok) dialogRef.current?.close();
+  }
+
+  async function handleSaveAndAddTask() {
+    const result = await saveActivity();
+    if (!result.ok) return;
     dialogRef.current?.close();
+    addTaskRef.current?.open({ originActivityId: result.activityId });
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -279,6 +313,16 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
             >
               {pending ? "Saving…" : "Save activity"}
             </button>
+            {canAddTask ? (
+              <button
+                type="button"
+                onClick={handleSaveAndAddTask}
+                disabled={pending || isFutureDate}
+                className="rounded-token border border-line px-4 py-2 text-sm font-medium text-ink outline-none hover:bg-raised focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
+              >
+                Save and add task
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => dialogRef.current?.close()}
@@ -289,6 +333,10 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
           </div>
         </form>
       </dialog>
+
+      {canAddTask && actorId ? (
+        <AddTaskModal ref={addTaskRef} dealId={dealId} timezone={timezone} actorId={actorId} assignableUsers={assignableUsers} showTrigger={false} />
+      ) : null}
     </>
   );
 }
