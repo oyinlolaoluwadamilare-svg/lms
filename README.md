@@ -10,7 +10,7 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** Current milestone: **M1 — Deals and pipeline**,
-   through task M1.6.
+   through task M1.7.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -302,6 +302,38 @@ correctly weights the *negotiated* value over the proposal value once both are s
 `docs/04-metric-definitions.md`. Full suite green: typecheck, lint, unit (76 tests), integration (24
 tests), RLS (79 tests), and the Playwright e2e suite (10 tests, re-run repeatedly to confirm the
 view-toggle fix actually resolved the flake rather than merely hiding it).
+
+**M1.7** (edit deal, with audit entries on every field change) is in place at `/deals/[id]/edit`,
+linked from the detail page's new "Edit deal" button (shown only when `can()` says so - a real,
+resource-scoped control, not a hidden link standing in for one). `src/services/deals.ts`'s
+`updateDeal` is the single path: it diffs the submitted values against the current row field by
+field and writes exactly one `audit_entries` row per edit whose `before`/`after` contain *only* the
+fields that actually changed - every field that changes is captured, but a field nobody touched
+isn't noise in the diff, and a no-op submit (identical values) writes no audit row at all, since
+CLAUDE.md #6 requires an entry for every *state change* and a submit that changes nothing is not
+one. Deliberately scoped to the fields plain `deal.update` covers - name, client type, expected
+close date, proposal value, negotiated value, brief. Three other deal fields are each gated by
+their own distinct permission action and are out of scope here, not silently folded in: owner
+(`deal.change_owner` - a bde structurally cannot do this, unlike every field this form does cover),
+co-owners (`deal.add_co_owner`), and forecast category (`deal.override_forecast_category`, which the
+schema itself ties to an `override_reason` column with no business rule specified anywhere in
+`docs/` for when a reason is required - an open question, not silently assumed one way or the
+other). Stage remains exclusively `changeStage`'s (M1.5).
+
+Verified against real, RLS-scoped sessions covering every angle the permission matrix implies for
+this fixture: the deal's owner (allowed), a co-owner who isn't the owner (also allowed - `own` scope
+includes co-owners, same as `changeStage`'s), a same-practice bde who is neither (denied - a real
+`can()` denial, confirmed distinct from the next case by first proving they *can* see the deal),
+and a bde from a different practice (`not_found` - RLS excludes the row before `can()` ever runs,
+same reasoning as `changeStage`'s `not_found` case) and an executive (sees the deal tenant-wide, but
+genuinely denied - `deal.update` is `null` for that role). A manual browser pass drove the actual
+running app end to end - opened a seeded deal, clicked through to the edit form, confirmed every
+field was correctly prefilled (including the money fields via the new `toMajorUnitsString`, the
+exact inverse of `toMinorUnits`, round-trip-tested in `tests/unit/deal.spec.ts`), submitted a real
+change, and confirmed both the updated detail page (weighted forecast recalculated correctly) and
+the resulting `audit_entries` row (containing only the two fields that had actually changed)
+directly against the database. Full suite green: typecheck, lint, unit (80 tests), integration
+(29 tests, re-run twice to confirm idempotency), RLS (79 tests), e2e (11 tests).
 
 ## Commands
 

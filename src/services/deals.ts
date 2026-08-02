@@ -3,14 +3,17 @@ import { can, type Actor } from "@/auth/permissions";
 import { listAccounts } from "@/data/accounts";
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import {
+  applyDealEdit,
   DealReferenceConflictError,
   getDealDetail as getDealDetailRow,
+  getDealForEdit,
   getDealForStageChange,
   insertDeal,
   listDeals,
   nextDealReference,
   updateDealStage,
   type DealDetail,
+  type DealEditFields,
   type DealListFilters,
   type DealListRow,
   type InsertedDeal,
@@ -242,4 +245,131 @@ export async function changeStage(
 // session, not a service-role client.
 export async function getDealDetail(supabase: SupabaseClient, dealId: string): Promise<DealDetail | null> {
   return getDealDetailRow(supabase, dealId);
+}
+
+export interface EditDealInput {
+  name: string;
+  clientType: ClientType;
+  expectedCloseDate: string; // YYYY-MM-DD
+  proposalValueMinor: bigint | null;
+  negotiatedValueMinor: bigint | null;
+  brief: string | null;
+}
+
+export type UpdateDealResult = { ok: true } | { ok: false; code: "not_found" | "denied" };
+
+// The single path for editing a deal's plain-update fields (docs/07-build-backlog.md M1.7).
+// Deliberately scoped to what deal.update covers - see the comment on src/data/deals.ts's
+// DealForEdit for the three fields (owner, co-owners, forecast_category) this does NOT touch,
+// each gated by its own distinct permission action.
+//
+// "Audit entries on every field change" (M1.7's exit criteria) is implemented as a single audit
+// row per edit whose before/after only contain the fields that actually changed, not the whole
+// row - every field that changes is captured, none is exempted, but a field nobody touched isn't
+// noise in the diff. If nothing actually changed (a no-op submit), no audit row is written at all:
+// CLAUDE.md #6 requires an entry for every state change, and a submit that changes nothing is not
+// one - a "you edited X" row where nothing moved would be exactly the misleading audit trail
+// invariant #4 (append-only, meaningful history) exists to prevent.
+export async function updateDeal(
+  supabase: SupabaseClient,
+  actor: Actor,
+  dealId: string,
+  input: EditDealInput,
+): Promise<UpdateDealResult> {
+  const deal = await getDealForEdit(supabase, dealId);
+  if (!deal) return { ok: false, code: "not_found" };
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  const resource = {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  };
+  if (!can(actor, "deal.update", resource)) {
+    return { ok: false, code: "denied" };
+  }
+
+  const before: Record<string, unknown> = {};
+  const after: Record<string, unknown> = {};
+  const noteChange = (field: string, beforeValue: unknown, afterValue: unknown) => {
+    if (beforeValue === afterValue) return;
+    before[field] = beforeValue;
+    after[field] = afterValue;
+  };
+
+  noteChange("name", deal.name, input.name);
+  noteChange("clientType", deal.clientType, input.clientType);
+  noteChange("expectedCloseDate", deal.expectedCloseDate, input.expectedCloseDate);
+  noteChange("proposalValueMinor", deal.proposalValueMinor?.toString() ?? null, input.proposalValueMinor?.toString() ?? null);
+  noteChange("negotiatedValueMinor", deal.negotiatedValueMinor?.toString() ?? null, input.negotiatedValueMinor?.toString() ?? null);
+  noteChange("brief", deal.brief, input.brief);
+
+  if (Object.keys(after).length === 0) {
+    return { ok: true };
+  }
+
+  const fields: DealEditFields = {
+    name: input.name,
+    clientType: input.clientType,
+    expectedCloseDate: input.expectedCloseDate,
+    proposalValueMinor: input.proposalValueMinor,
+    negotiatedValueMinor: input.negotiatedValueMinor,
+    brief: input.brief,
+  };
+  await applyDealEdit(supabase, dealId, fields);
+
+  await writeAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.id,
+    entityType: "deal",
+    entityId: dealId,
+    action: "deal.update",
+    before,
+    after,
+  });
+
+  return { ok: true };
+}
+
+export interface DealEditView {
+  id: string;
+  name: string;
+  clientType: ClientType;
+  expectedCloseDate: string | null;
+  proposalValueMinor: bigint | null;
+  negotiatedValueMinor: bigint | null;
+  currencyCode: string;
+  brief: string | null;
+  canEdit: boolean;
+}
+
+// Bundles the edit form's current-value prefill with the can() check, so the page renders a
+// Denied state instead of the form when the answer is no - a hidden edit link elsewhere is
+// presentation only (CLAUDE.md #1), this is the real, resource-scoped control.
+export async function getDealForEditView(supabase: SupabaseClient, actor: Actor, dealId: string): Promise<DealEditView | null> {
+  const deal = await getDealForEdit(supabase, dealId);
+  if (!deal) return null;
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  const canEdit = can(actor, "deal.update", {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  });
+
+  return {
+    id: deal.id,
+    name: deal.name,
+    clientType: deal.clientType,
+    expectedCloseDate: deal.expectedCloseDate,
+    proposalValueMinor: deal.proposalValueMinor,
+    negotiatedValueMinor: deal.negotiatedValueMinor,
+    currencyCode: deal.currencyCode,
+    brief: deal.brief,
+    canEdit,
+  };
 }

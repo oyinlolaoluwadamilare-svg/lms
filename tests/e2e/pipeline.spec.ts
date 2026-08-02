@@ -93,3 +93,18 @@ test("visiting a nonexistent deal shows a not-found state, not an error page", a
   await page.goto("/deals/00000000-0000-0000-0000-000000000000");
   await expect(page.getByText("Deal not found")).toBeVisible();
 });
+
+// M1.7: edit deal. The happy path (prefilled form, submit, audit row with only the changed
+// fields) is proven end to end against real data in tests/integration/pipeline-list.spec.ts's
+// updateDeal suite and was manually verified against the actual running app during development -
+// see README.md's M1.7 entry. Same limitation as above: no seeded deal to edit here.
+test("visiting the edit page for a nonexistent deal shows a not-found state", async ({ page }) => {
+  await page.goto("/sign-in");
+  await page.getByLabel("Email").fill("bde-1@acme-demo.test");
+  await page.getByLabel("Password").fill("Demo-Password-1!");
+  await page.getByRole("button", { name: "Sign in" }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"));
+
+  await page.goto("/deals/00000000-0000-0000-0000-000000000000/edit");
+  await expect(page.getByText("Deal not found")).toBeVisible();
+});

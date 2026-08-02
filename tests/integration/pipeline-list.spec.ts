@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getSessionActor } from "@/services/actor";
-import { changeStage, getDealDetail, listPipelineDeals } from "@/services/deals";
+import { changeStage, getDealDetail, listPipelineDeals, updateDeal } from "@/services/deals";
 import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M1.4/M1.5 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced
@@ -394,5 +394,122 @@ describe("changeStage", () => {
       before: { stageId: ids.discoveryStageId },
       after: { stageId: ids.proposalStageId },
     });
+  });
+});
+
+// M1.7 exit criteria (docs/07-build-backlog.md): "Edit deal, with audit entries on every field
+// change." Reuses advisoryDealId again, after changeStage has already moved it to Proposal above -
+// none of these assertions depend on which stage it's in. Ordered so the one real edit (the last
+// test) runs after every permission/scoping case, for the same reason as changeStage's own ordering.
+describe("updateDeal", () => {
+  const editInput = {
+    name: "Advisory Pipeline Deal",
+    clientType: "new" as const,
+    expectedCloseDate: "2027-03-01",
+    proposalValueMinor: 100_000_000n,
+    negotiatedValueMinor: null,
+    brief: null,
+  };
+
+  it("a bde outside the deal's practice can't even see it - not_found, same reasoning as changeStage", async () => {
+    const client = await signIn("m1-4-bde-search@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await updateDeal(client, session.actor, ids.advisoryDealId, editInput);
+    expect(result).toEqual({ ok: false, code: "not_found" });
+  });
+
+  it("a same-practice bde who isn't owner/co-owner/author is denied - deal.update is 'own' scoped for bde", async () => {
+    const client = await signIn("m1-4-bde-advisory-2@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await updateDeal(client, session.actor, ids.advisoryDealId, editInput);
+    expect(result).toEqual({ ok: false, code: "denied" });
+  });
+
+  it("an executive can see the deal (tenant-wide view) but is genuinely denied - deal.update is null for executive", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const visible = await getDealDetail(client, ids.advisoryDealId);
+    expect(visible).not.toBeNull();
+
+    const result = await updateDeal(client, session.actor, ids.advisoryDealId, editInput);
+    expect(result).toEqual({ ok: false, code: "denied" });
+  });
+
+  it("a co-owner (not the owner) can edit - deal.update's 'own' scope includes co-owners, same as changeStage's", async () => {
+    const client = await signIn("m1-4-bde-advisory-3@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    // A no-op edit (identical values) so this doesn't disturb the "exactly one audit row, only the
+    // changed fields" assertion the next test makes - proves the co-owner path is allowed without
+    // pre-empting what actually changes.
+    const result = await updateDeal(client, session.actor, ids.advisoryDealId, editInput);
+    expect(result).toEqual({ ok: true });
+
+    const { data: auditRows } = await service
+      .from("audit_entries")
+      .select("id")
+      .eq("entity_id", ids.advisoryDealId)
+      .eq("action", "deal.update");
+    expect(auditRows).toHaveLength(0);
+  });
+
+  it("the owning bde edits several fields at once; the audit row's before/after contain only what changed", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await updateDeal(client, session.actor, ids.advisoryDealId, {
+      name: "Advisory Pipeline Deal (Revised)",
+      clientType: "new",
+      expectedCloseDate: "2027-03-01", // unchanged
+      proposalValueMinor: 100_000_000n, // unchanged
+      negotiatedValueMinor: 90_000_000n, // newly set
+      brief: "Renegotiated after the discovery call.",
+    });
+    expect(result).toEqual({ ok: true });
+
+    const { data: dealRow } = await service
+      .from("deals")
+      .select("name, negotiated_value_minor::text, brief")
+      .eq("id", ids.advisoryDealId)
+      .single();
+    expect(dealRow).toMatchObject({
+      name: "Advisory Pipeline Deal (Revised)",
+      negotiated_value_minor: "90000000",
+      brief: "Renegotiated after the discovery call.",
+    });
+
+    const { data: auditRows } = await service
+      .from("audit_entries")
+      .select("action, actor_id, before, after")
+      .eq("entity_id", ids.advisoryDealId)
+      .eq("action", "deal.update");
+    expect(auditRows).toHaveLength(1);
+    expect(auditRows?.[0]).toMatchObject({
+      action: "deal.update",
+      actor_id: ids.bdeAdvisoryAuthId,
+      before: { name: "Advisory Pipeline Deal", negotiatedValueMinor: null, brief: null },
+      after: {
+        name: "Advisory Pipeline Deal (Revised)",
+        negotiatedValueMinor: "90000000",
+        brief: "Renegotiated after the discovery call.",
+      },
+    });
+    // expectedCloseDate/proposalValueMinor/clientType didn't change - proves the diff really is
+    // field-scoped, not a snapshot of the whole submitted input.
+    expect(auditRows?.[0]?.before).not.toHaveProperty("expectedCloseDate");
+    expect(auditRows?.[0]?.after).not.toHaveProperty("proposalValueMinor");
   });
 });

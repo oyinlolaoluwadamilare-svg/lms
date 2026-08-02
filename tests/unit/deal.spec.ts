@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dealValue, formatDealReference, isOpenStage, resolveProbability, weightedValue } from "../../src/domain/deal";
-import { formatMoney, parseMoneyMinor, toMinorUnits } from "../../src/domain/money";
+import { formatMoney, parseMoneyMinor, toMajorUnitsString, toMinorUnits } from "../../src/domain/money";
 
 const STAGE = { probabilityThreshold: 40 };
 
@@ -150,5 +150,26 @@ describe("isOpenStage", () => {
   it("is false for won and lost - changeStage must refuse these, closeDeal (M5.2) owns them", () => {
     expect(isOpenStage("won")).toBe(false);
     expect(isOpenStage("lost")).toBe(false);
+  });
+});
+
+describe("toMajorUnitsString", () => {
+  it("is the exact inverse of toMinorUnits for a whole-number amount", () => {
+    const minor = toMinorUnits("1500000");
+    expect(toMajorUnitsString(minor)).toBe("1500000.00");
+  });
+
+  it("is the exact inverse of toMinorUnits for an amount with cents", () => {
+    const minor = toMinorUnits("1500000.50");
+    expect(toMajorUnitsString(minor)).toBe("1500000.50");
+  });
+
+  it("round-trips back through toMinorUnits to the same bigint - no float involved either way", () => {
+    const original = 9_007_199_254_740_993n; // beyond Number.MAX_SAFE_INTEGER
+    expect(toMinorUnits(toMajorUnitsString(original))).toBe(original);
+  });
+
+  it("never emits thousands separators - an edit field must parse back cleanly", () => {
+    expect(toMajorUnitsString(150_000_000n)).toBe("1500000.00");
   });
 });

@@ -1,5 +1,7 @@
+import Link from "next/link";
 import { formatMoney } from "@/domain/money";
-import { getDealDetail } from "@/services/deals";
+import { getDealDetail, getDealForEditView } from "@/services/deals";
+import { getSessionActor } from "@/services/actor";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
@@ -13,10 +15,15 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
 
   const { id } = await params;
   const supabase = await createClient();
+  const session = await getSessionActor(supabase);
+
   // getDealDetail reads through this caller's own RLS-scoped session (migration 0005's
   // deals_select policy) - null means either the deal doesn't exist or this actor can't see it,
   // deliberately not distinguished (same reasoning as changeStage's not_found case).
-  const deal = await getDealDetail(supabase, id);
+  const [deal, editView] = await Promise.all([
+    getDealDetail(supabase, id),
+    session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
+  ]);
 
   if (!deal) {
     return <EmptyState title="Deal not found" description="It may not exist, or isn't visible to your role." />;
@@ -25,21 +32,32 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2 rounded-token border border-line bg-raised p-6">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-semibold text-ink">{deal.name}</h1>
-          <span className="rounded-token bg-surface px-2 py-0.5 text-xs font-medium text-muted">{deal.reference}</span>
-          <span className="rounded-token bg-accent px-2 py-0.5 text-xs font-medium text-surface">{deal.stage.name}</span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-xl font-semibold text-ink">{deal.name}</h1>
+            <span className="rounded-token bg-surface px-2 py-0.5 text-xs font-medium text-muted">{deal.reference}</span>
+            <span className="rounded-token bg-accent px-2 py-0.5 text-xs font-medium text-surface">{deal.stage.name}</span>
+          </div>
+          {editView?.canEdit ? (
+            <Link
+              href={`/deals/${deal.id}/edit`}
+              prefetch={false}
+              className="rounded-token border border-line px-3 py-1.5 text-sm font-medium text-ink outline-none hover:bg-surface focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Edit deal
+            </Link>
+          ) : null}
         </div>
         <p className="text-sm text-muted">{deal.account.name}</p>
       </header>
 
-      {/* Deliberately no next-action strip, last-engaged chip, primary action buttons (Log
-          Activity, Add Task, Edit Deal, Advance Stage, Mark Won/Lost, Escalate, Add Contact),
-          engagement timeline, stakeholders or open tasks here - docs/06-ui-spec.md's full Deal
-          detail spec includes all of these, but every one depends on an entity or action that
-          doesn't exist yet (activities: M3+; tasks: M4+; edit: M1.7; mark won/lost: M5.2-M5.3).
-          This is the read-only skeleton docs/07-build-backlog.md M1.6 asks for: header, financial
-          summary, details, account - nothing rendered here would actually do anything yet. */}
+      {/* Deliberately no next-action strip, last-engaged chip, most primary action buttons (Log
+          Activity, Add Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), engagement
+          timeline, stakeholders or open tasks here - docs/06-ui-spec.md's full Deal detail spec
+          includes all of these, but every one depends on an entity or action that doesn't exist
+          yet (activities: M3+; tasks: M4+; mark won/lost: M5.2-M5.3). Edit Deal above is the one
+          action that now exists (M1.7); this is otherwise the same read-only skeleton
+          docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">

@@ -465,3 +465,108 @@ export async function getDealDetail(supabase: SupabaseClient, dealId: string): P
     updatedAt: row.updated_at,
   };
 }
+
+// M1.7 exit criteria (docs/07-build-backlog.md): "Edit deal, with audit entries on every field
+// change." Deliberately scoped to the fields plain deal.update covers - name, clientType,
+// expectedCloseDate, proposalValueMinor, negotiatedValueMinor, brief. Three other deal fields are
+// each gated by their OWN distinct permission action, not deal.update, and are out of scope here:
+// owner (deal.change_owner - a bde structurally cannot do this, unlike every field below),
+// co-owners (deal.add_co_owner) and forecast_category (deal.override_forecast_category, which the
+// schema itself ties to an override_reason column with no specified business rule anywhere in
+// docs/ for when a reason is required - an open question, not silently assumed). stage_id is
+// changeStage's (M1.5) exclusively, and account_id/practice_line_id/status have no edit action
+// defined in docs/02-permission-matrix.md at all.
+export interface DealForEdit {
+  id: string;
+  tenantId: string;
+  practiceLineId: string;
+  ownerId: string | null;
+  authorId: string;
+  status: DealStatus;
+  name: string;
+  clientType: ClientType;
+  expectedCloseDate: string | null;
+  proposalValueMinor: bigint | null;
+  negotiatedValueMinor: bigint | null;
+  currencyCode: string;
+  brief: string | null;
+}
+
+interface DealForEditRow {
+  id: string;
+  tenant_id: string;
+  practice_line_id: string;
+  owner_id: string | null;
+  author_id: string;
+  status: DealStatus;
+  name: string;
+  client_type: ClientType;
+  expected_close_date: string | null;
+  proposal_value_minor: string | null;
+  negotiated_value_minor: string | null;
+  currency_code: string;
+  brief: string | null;
+}
+
+// For the edit form's authorisation check and current-value prefill - just enough of the deal,
+// same shape reasoning as getDealForStageChange (not reusing getDealDetail's display-oriented
+// shape, which resolves names via joins this doesn't need and omits raw ids this does).
+export async function getDealForEdit(supabase: SupabaseClient, dealId: string): Promise<DealForEdit | null> {
+  const { data, error } = await supabase
+    .from("deals")
+    .select(
+      "id, tenant_id, practice_line_id, owner_id, author_id, status, name, client_type, " +
+        "expected_close_date, proposal_value_minor::text, negotiated_value_minor::text, currency_code, brief",
+    )
+    .eq("id", dealId)
+    .is("deleted_at", null)
+    .maybeSingle();
+
+  if (error) throw new Error(`getDealForEdit failed: ${error.message}`);
+  if (!data) return null;
+
+  const row = data as unknown as DealForEditRow;
+  return {
+    id: row.id,
+    tenantId: row.tenant_id,
+    practiceLineId: row.practice_line_id,
+    ownerId: row.owner_id,
+    authorId: row.author_id,
+    status: row.status,
+    name: row.name,
+    clientType: row.client_type,
+    expectedCloseDate: row.expected_close_date,
+    proposalValueMinor: parseMoneyMinor(row.proposal_value_minor),
+    negotiatedValueMinor: parseMoneyMinor(row.negotiated_value_minor),
+    currencyCode: row.currency_code,
+    brief: row.brief,
+  };
+}
+
+export interface DealEditFields {
+  name: string;
+  clientType: ClientType;
+  expectedCloseDate: string;
+  proposalValueMinor: bigint | null;
+  negotiatedValueMinor: bigint | null;
+  brief: string | null;
+}
+
+// The only place these fields are written from application code - called exclusively by
+// src/services/deals.ts's updateDeal. updated_at/updated_by are not set here, same reasoning as
+// updateDealStage: migration 0006's trigger sets both from auth.uid().
+export async function applyDealEdit(supabase: SupabaseClient, dealId: string, fields: DealEditFields): Promise<void> {
+  const { error } = await supabase
+    .from("deals")
+    .update({
+      name: fields.name,
+      client_type: fields.clientType,
+      expected_close_date: fields.expectedCloseDate,
+      proposal_value_minor: fields.proposalValueMinor === null ? null : fields.proposalValueMinor.toString(),
+      negotiated_value_minor: fields.negotiatedValueMinor === null ? null : fields.negotiatedValueMinor.toString(),
+      brief: fields.brief,
+    })
+    .eq("id", dealId);
+
+  if (error) throw new Error(`applyDealEdit failed: ${error.message}`);
+}

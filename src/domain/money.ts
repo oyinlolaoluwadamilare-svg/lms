@@ -55,3 +55,15 @@ export function formatMoney(money: Money, decimalPlaces = 2): string {
   const fractionStr = fraction.toString().padStart(decimalPlaces, "0");
   return `${money.currency} ${whole.toLocaleString("en-US")}.${fractionStr}`;
 }
+
+// The exact inverse of toMinorUnits - for pre-filling an editable amount input with the deal's
+// current value (M1.7's edit form), where a currency prefix and thousands separators would just be
+// noise the user has to delete before typing a new amount. No toLocaleString grouping here on
+// purpose, for the same reason: an edit field should round-trip back through toMinorUnits exactly,
+// which grouping separators would break.
+export function toMajorUnitsString(amountMinor: bigint, decimalPlaces = 2): string {
+  const divisor = 10n ** BigInt(decimalPlaces);
+  const whole = amountMinor / divisor;
+  const fraction = amountMinor % divisor;
+  return `${whole}.${fraction.toString().padStart(decimalPlaces, "0")}`;
+}
