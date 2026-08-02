@@ -165,8 +165,12 @@ export async function getPipelineFilterOptions(supabase: SupabaseClient): Promis
 // satisfied by the database itself for this action, the same way every other list/detail read in
 // this app is - there is no separate can() check for deal.view the way deal.create has one, since
 // unlike a write there is no "resource that doesn't exist yet" to check against).
-export async function listPipelineDeals(supabase: SupabaseClient, filters: DealListFilters): Promise<DealListRow[]> {
-  return listDeals(supabase, filters);
+export async function listPipelineDeals(
+  supabase: SupabaseClient,
+  filters: DealListFilters,
+  timezone: string,
+): Promise<DealListRow[]> {
+  return listDeals(supabase, filters, timezone);
 }
 
 export type ChangeStageResult =

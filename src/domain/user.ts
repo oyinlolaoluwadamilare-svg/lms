@@ -6,4 +6,5 @@ export interface AppUser {
   fullName: string;
   email: string;
   status: UserStatus;
+  timezone: string | null;
 }

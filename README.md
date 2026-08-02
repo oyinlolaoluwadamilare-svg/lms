@@ -10,7 +10,8 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
-   Current milestone: **M2 — Engagement history**, through task M2.1/M2.2.
+   Current milestone: **M2 — Engagement history**, through task M2.3 (staleness colour, M2.3's other
+   half, deliberately deferred to M3.7 — see the `## M2` section below).
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -450,6 +451,48 @@ and `stage_events` assertions (from/to stage, actor, `is_regression`, and
 `duration_in_previous_seconds` checked against an independently recomputed expected value, not a
 hardcoded one) - and the full Playwright e2e suite (11 tests) green, confirming no regression
 anywhere else.
+
+**M2.3** (`days-in-current-stage`) is scoped narrower than the backlog line reads, deliberately:
+"Days-in-current-stage derived from the latest event; staleness colour on board and table" reads as
+one deliverable, but `docs/04-metric-definitions.md`'s own "Staleness bands" definition ties that
+colour strictly to `deals.last_engaged_at` (an M3 concept - nothing populates that column until the
+activities entity exists). Implementing a colour band against a column that's null for every deal
+today would repeat the exact premature-feature mistake M1.4's own filter set already avoided once,
+so this milestone ships days-in-current-stage only; staleness colour is deferred to M3.7, where the
+docs already define it correctly against real data.
+
+This is also the first real use of `tenants.timezone`/`users.timezone` in this codebase (CLAUDE.md
+#8: "Timestamps stored in UTC, rendered in the user's timezone. Default tenant timezone is
+Africa/Lagos"). New `src/lib/dates.ts` provides `resolveTimezone` (a user's own override wins over
+their tenant's default) and `daysBetweenInTimezone` - whole calendar days between two instants,
+each resolved to its calendar date **in the given timezone first**, never a raw UTC millisecond
+difference divided by 86400 - the exact bug class CLAUDE.md #8 exists to prevent (an instant at
+23:30 WAT is already the next calendar day locally even though it isn't in UTC).
+`tests/unit/dates.spec.ts` proves this against three separate cases, not just the happy path: a
+30-minute span that crosses a day boundary in `Africa/Lagos` (WAT, UTC+1) but not in UTC - the exact
+scenario `docs/07-build-backlog.md`'s M3.9 names ("an activity logged at 23:30 WAT renders the
+correct local date"); the mirror-image case in a negative-offset zone (`America/Los_Angeles`) to
+prove the fix isn't coincidentally only correct for positive offsets; and a negative-span clamp (a
+`since` later than `until` renders `0`, never a nonsensical negative day count).
+
+`src/services/actor.ts`'s `ActorResult` now carries a single resolved `timezone` string (fetched
+alongside role grants and tenant name), so every future date-rendering call site has one place to
+get it right rather than re-deriving the override/fallback logic itself.
+`src/data/stageEvents.ts`'s new `getLatestStageEventOccurredAtByDeal` and `src/data/deals.ts`'s
+`listDeals` (now `listDeals(supabase, filters, timezone, now?)`) combine to compute
+`daysInCurrentStage` per row: the latest `stage_events.occurred_at` for that deal, or
+`deals.created_at` if it has never had a transition (`createDeal` deliberately writes no
+`stage_events` row - creation isn't a transition per `docs/01-domain-model.md`'s list of transition
+paths). Surfaced on both the pipeline table (a new "Days in stage" column) and the board card.
+
+Verified: typecheck, lint, unit (159 tests, 9 new for `src/lib/dates.ts` including the WAT/UTC
+boundary cases above), RLS (112 tests, unchanged - no new RLS surface), `test:integration` (31
+tests, 2 new, against the real hosted project, independently recomputing the expected
+`daysInCurrentStage` from the deal's real `created_at`/latest `stage_events` row rather than
+hardcoding a value that would only hold on a fresh fixture), and the full Playwright e2e suite (11
+tests, unchanged - the seeded demo tenant this suite runs against has zero deals, so the new column
+never actually renders there; a populated view was verified manually against the real
+`m1-4-integration-test` fixture tenant instead, screenshotted for both table and board).
 
 ## Commands
 

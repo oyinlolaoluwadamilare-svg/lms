@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
+import { daysBetweenInTimezone } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import { changeStage, getDealDetail, listPipelineDeals, updateDeal } from "@/services/deals";
 import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
@@ -222,7 +223,7 @@ afterAll(cleanup);
 describe("listPipelineDeals, RLS scoping", () => {
   it("a bde sees only their own practice line's deal, correctly joined and money-exact", async () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
-    const deals = await listPipelineDeals(client, {});
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
 
     expect(deals).toHaveLength(1);
     const [deal] = deals;
@@ -238,7 +239,7 @@ describe("listPipelineDeals, RLS scoping", () => {
 
   it("a bde in a different practice line sees the other deal instead, never both", async () => {
     const client = await signIn("m1-4-bde-search@example.com");
-    const deals = await listPipelineDeals(client, {});
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
 
     expect(deals).toHaveLength(1);
     expect(deals[0]!.id).toBe(ids.searchDealId);
@@ -248,7 +249,7 @@ describe("listPipelineDeals, RLS scoping", () => {
 
   it("an executive sees every deal in the tenant, across both practice lines", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deals = await listPipelineDeals(client, {});
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
 
     expect(deals.map((d) => d.id).sort()).toEqual([ids.advisoryDealId, ids.searchDealId].sort());
   });
@@ -257,35 +258,80 @@ describe("listPipelineDeals, RLS scoping", () => {
 describe("listPipelineDeals, filters", () => {
   it("filters by status", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deals = await listPipelineDeals(client, { status: "won" });
+    const deals = await listPipelineDeals(client, { status: "won" }, "Africa/Lagos");
     expect(deals).toHaveLength(1);
     expect(deals[0]!.id).toBe(ids.searchDealId);
   });
 
   it("filters by client type", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deals = await listPipelineDeals(client, { clientType: "new" });
+    const deals = await listPipelineDeals(client, { clientType: "new" }, "Africa/Lagos");
     expect(deals).toHaveLength(1);
     expect(deals[0]!.id).toBe(ids.advisoryDealId);
   });
 
   it("filters by practice line", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deals = await listPipelineDeals(client, { practiceLineId: ids.searchPracticeLineId });
+    const deals = await listPipelineDeals(client, { practiceLineId: ids.searchPracticeLineId }, "Africa/Lagos");
     expect(deals).toHaveLength(1);
     expect(deals[0]!.id).toBe(ids.searchDealId);
   });
 
   it("filters by stage", async () => {
     const client = await signIn("m1-4-executive@example.com");
-    const deals = await listPipelineDeals(client, { stageId: ids.lostStageId });
+    const deals = await listPipelineDeals(client, { stageId: ids.lostStageId }, "Africa/Lagos");
     expect(deals).toHaveLength(0);
   });
 
   it("a filter that narrows to nothing for this bde's practice returns empty, not the other practice's deal", async () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
-    const deals = await listPipelineDeals(client, { clientType: "existing" });
+    const deals = await listPipelineDeals(client, { clientType: "existing" }, "Africa/Lagos");
     expect(deals).toHaveLength(0);
+  });
+});
+
+// M2.3 (docs/07-build-backlog.md): "Days-in-current-stage derived from the latest event." Scoped
+// to that half only - "staleness colour" is deferred to M3.7 per src/data/deals.ts's own comment
+// (docs/04-metric-definitions.md ties it strictly to last_engaged_at, an M3 concept that doesn't
+// exist yet). Expected values are independently recomputed here (same reasoning as the
+// stage_events assertions in the changeStage block below), not hardcoded - this fixture's deals
+// carry real accumulated history across every run of this suite, so "days since" is never a fixed
+// number.
+describe("listPipelineDeals, daysInCurrentStage (M2.3)", () => {
+  it("a deal that has never had a stage transition falls back to deals.created_at", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const { data: dealRow } = await service.from("deals").select("created_at").eq("id", ids.searchDealId).single();
+
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
+    const searchDeal = deals.find((d) => d.id === ids.searchDealId);
+    expect(searchDeal).toBeDefined();
+
+    const expectedDays = daysBetweenInTimezone(dealRow!.created_at, new Date().toISOString(), "Africa/Lagos");
+    expect(searchDeal!.daysInCurrentStage).toBe(expectedDays);
+  });
+
+  it("a deal with a real stage_events history uses the latest event, not deals.created_at", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const { data: latestEvent } = await service
+      .from("stage_events")
+      .select("occurred_at")
+      .eq("deal_id", ids.advisoryDealId)
+      .order("occurred_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const deals = await listPipelineDeals(client, {}, "Africa/Lagos");
+    const advisoryDeal = deals.find((d) => d.id === ids.advisoryDealId);
+    expect(advisoryDeal).toBeDefined();
+
+    // This describe block runs before the changeStage block below (mirroring getDealDetail's own
+    // ordering comment), but the fixture's find-or-create deal can already carry a stage_events
+    // row from an earlier real run - so both branches (no history yet vs. real history already)
+    // are handled the same way: fetch the real "since" value and recompute independently.
+    const { data: dealRow } = await service.from("deals").select("created_at").eq("id", ids.advisoryDealId).single();
+    const sinceIso = latestEvent?.occurred_at ?? dealRow!.created_at;
+    const expectedDays = daysBetweenInTimezone(sinceIso, new Date().toISOString(), "Africa/Lagos");
+    expect(advisoryDeal!.daysInCurrentStage).toBe(expectedDays);
   });
 });
 
@@ -399,7 +445,7 @@ describe("changeStage", () => {
     // Confirms this bde genuinely can see the deal (deal.view is practice-scoped) - ruling out the
     // not_found case above before asserting the denial is a real can() denial, not a masked read
     // failure of a different kind.
-    const visible = await listPipelineDeals(client, {});
+    const visible = await listPipelineDeals(client, {}, "Africa/Lagos");
     expect(visible.some((d) => d.id === ids.advisoryDealId)).toBe(true);
 
     const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.proposalStageId);

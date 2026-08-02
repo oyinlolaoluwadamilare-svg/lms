@@ -51,10 +51,14 @@ export default async function DealsPage({ searchParams }: { searchParams: Promis
   const supabase = await createClient();
   const result = await getCachedActor();
   const canCreate = result.status === "active" && can(result.actor, "deal.create");
+  // layout.tsx already redirects a signed-out/suspended session before any (app) page renders, so
+  // result.status is "active" in practice here - this fallback only satisfies the type checker,
+  // it is never actually exercised (see checkRouteAccess's own comment for the same reasoning).
+  const timezone = result.status === "active" ? result.timezone : "Africa/Lagos";
 
   const [filterOptions, deals] = await Promise.all([
     getPipelineFilterOptions(supabase),
-    listPipelineDeals(supabase, filters),
+    listPipelineDeals(supabase, filters, timezone),
   ]);
 
   const hasAnyFilter = Object.values(filters).some((v) => v !== undefined);

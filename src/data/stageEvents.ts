@@ -54,3 +54,32 @@ export async function insertStageEvent(serviceClient: SupabaseClient, input: Sta
   if (error) throw new Error(`insertStageEvent failed: ${error.message}`);
   return toDomain(data as unknown as StageEventsRow);
 }
+
+// M2.3: "days in current stage" needs, per deal, the occurred_at of its MOST RECENT stage_events
+// row (or nothing, for a deal that has never had a stage transition since creation - see
+// src/data/deals.ts's fallback to deals.created_at for that case). Reads through the caller's own
+// RLS-scoped session, same reasoning as listDeals: stage_events_select (migration 0007) already
+// scopes these rows to the caller's tenant/practice entitlement, so no additional narrowing is
+// needed here beyond the deal ids the caller already has RLS-scoped access to.
+export async function getLatestStageEventOccurredAtByDeal(
+  supabase: SupabaseClient,
+  dealIds: string[],
+): Promise<Map<string, string>> {
+  if (dealIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("stage_events")
+    .select("deal_id, occurred_at")
+    .in("deal_id", dealIds)
+    .order("occurred_at", { ascending: false });
+
+  if (error) throw new Error(`getLatestStageEventOccurredAtByDeal failed: ${error.message}`);
+
+  // Descending order means the first row seen per deal_id is its latest - a plain reduce, not a
+  // second sort per group.
+  const latest = new Map<string, string>();
+  for (const row of data as Array<{ deal_id: string; occurred_at: string }>) {
+    if (!latest.has(row.deal_id)) latest.set(row.deal_id, row.occurred_at);
+  }
+  return latest;
+}

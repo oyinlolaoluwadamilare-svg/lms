@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { daysBetweenInTimezone } from "@/lib/dates";
+import { getLatestStageEventOccurredAtByDeal } from "@/data/stageEvents";
 import { parseMoneyMinor, type Money } from "@/domain/money";
 import {
   dealValue,
@@ -192,6 +194,7 @@ export interface DealListRow {
   expectedCloseDate: string | null;
   value: Money | null;
   weightedValue: Money | null;
+  daysInCurrentStage: number;
 }
 
 interface DealListRowRaw {
@@ -206,21 +209,39 @@ interface DealListRowRaw {
   negotiated_value_minor: string | null;
   currency_code: string;
   probability_override: number | null;
+  created_at: string;
   accounts: { name: string } | null;
   practice_lines: { name: string } | null;
   pipeline_stages: { id: string; name: string; sort_order: number; probability_threshold: number; stage_type: StageType } | null;
   owner: { full_name: string } | null;
 }
 
+// M2.3 (docs/07-build-backlog.md): "Days-in-current-stage derived from the latest event." Scoped
+// to that half of the task only - "staleness colour" is, per docs/04-metric-definitions.md's own
+// "Staleness bands" definition, strictly about days-since-last-engagement (deals.last_engaged_at),
+// an M3 concept that doesn't exist yet (nothing populates last_engaged_at until the activities
+// entity does). Implementing a colour band against a column that's null for every deal today would
+// repeat the exact premature-feature mistake M1.4's own filter set already avoided once - so
+// staleness colour is deferred to M3.7, where the docs already define it correctly, and this
+// function surfaces the one derived value M2.1's stage_events genuinely supports today: how long a
+// deal has sat in its current stage. `timezone` and `now` are the viewer's resolved timezone
+// (src/services/actor.ts) and the current instant - CLAUDE.md #8: rendered in the user's timezone,
+// never computed as a raw UTC day count (see src/lib/dates.ts's own comment for why that's wrong).
+//
 // RLS's deals_select policy (migration 0005) already scopes rows to the caller's tenant and
 // practice entitlement (or tenant-wide for executive/tenant_admin) - every filter here narrows
 // within whatever that policy already allows, it never widens it.
-export async function listDeals(supabase: SupabaseClient, filters: DealListFilters = {}): Promise<DealListRow[]> {
+export async function listDeals(
+  supabase: SupabaseClient,
+  filters: DealListFilters,
+  timezone: string,
+  now: Date = new Date(),
+): Promise<DealListRow[]> {
   let query = supabase
     .from("deals")
     .select(
       "id, reference, name, client_type, status, forecast_category, expected_close_date, " +
-        "proposal_value_minor::text, negotiated_value_minor::text, currency_code, probability_override, " +
+        "proposal_value_minor::text, negotiated_value_minor::text, currency_code, probability_override, created_at, " +
         "accounts(name), practice_lines(name), " +
         "pipeline_stages(id, name, sort_order, probability_threshold, stage_type), " +
         "owner:users!owner_id(full_name)",
@@ -240,7 +261,14 @@ export async function listDeals(supabase: SupabaseClient, filters: DealListFilte
   const { data, error } = await query.order("expected_close_date", { ascending: true, nullsFirst: false });
   if (error) throw new Error(`listDeals failed: ${error.message}`);
 
-  return (data as unknown as DealListRowRaw[]).map((row) => {
+  const rows = data as unknown as DealListRowRaw[];
+  const latestStageEventByDeal = await getLatestStageEventOccurredAtByDeal(
+    supabase,
+    rows.map((row) => row.id),
+  );
+  const nowIso = now.toISOString();
+
+  return rows.map((row) => {
     if (!row.pipeline_stages) {
       throw new Error(`deal ${row.id} has no resolvable stage (stage_id is not-null, but the join returned nothing)`);
     }
@@ -258,6 +286,11 @@ export async function listDeals(supabase: SupabaseClient, filters: DealListFilte
       probabilityOverride: row.probability_override,
     };
     const stageForCalc: StageForCalculation = { probabilityThreshold: row.pipeline_stages.probability_threshold };
+    // Falls back to the deal's own created_at when it has never had a stage_events row (a deal
+    // that was created and has never been moved - createDeal, unlike changeStage, deliberately
+    // writes no stage_events row, since creation itself isn't a transition per
+    // docs/01-domain-model.md's list of transition paths).
+    const sinceIso = latestStageEventByDeal.get(row.id) ?? row.created_at;
 
     return {
       id: row.id,
@@ -278,6 +311,7 @@ export async function listDeals(supabase: SupabaseClient, filters: DealListFilte
       expectedCloseDate: row.expected_close_date,
       value: dealValue(dealForCalc),
       weightedValue: weightedValue(dealForCalc, stageForCalc),
+      daysInCurrentStage: daysBetweenInTimezone(sinceIso, nowIso, timezone),
     };
   });
 }

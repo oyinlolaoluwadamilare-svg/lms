@@ -7,6 +7,7 @@ interface UsersRow {
   full_name: string;
   email: string;
   status: AppUser["status"];
+  timezone: string | null;
 }
 
 function toDomain(row: UsersRow): AppUser {
@@ -16,6 +17,7 @@ function toDomain(row: UsersRow): AppUser {
     fullName: row.full_name,
     email: row.email,
     status: row.status,
+    timezone: row.timezone,
   };
 }
 
@@ -31,7 +33,7 @@ export async function getUserByAuthId(
 ): Promise<AppUser | null> {
   const { data, error } = await supabase
     .from("users")
-    .select("id, tenant_id, full_name, email, status")
+    .select("id, tenant_id, full_name, email, status, timezone")
     .eq("id", authId)
     .eq("status", "active")
     .is("deleted_at", null)

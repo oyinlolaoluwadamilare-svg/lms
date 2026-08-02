@@ -28,6 +28,7 @@ export function PipelineTable({ deals }: { deals: DealListRow[] }) {
             <Th>Account</Th>
             <Th>Practice line</Th>
             <Th>Stage</Th>
+            <Th>Days in stage</Th>
             <Th>Owner</Th>
             <Th>Client</Th>
             <Th>Forecast</Th>
@@ -49,6 +50,7 @@ export function PipelineTable({ deals }: { deals: DealListRow[] }) {
               <Td>{deal.accountName}</Td>
               <Td>{deal.practiceLineName}</Td>
               <Td>{deal.stage.name}</Td>
+              <Td>{deal.daysInCurrentStage}</Td>
               <Td>{deal.ownerName ?? "—"}</Td>
               <Td className="capitalize">{deal.clientType}</Td>
               <Td className="capitalize">{deal.forecastCategory.replace("_", " ")}</Td>

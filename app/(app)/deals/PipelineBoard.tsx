@@ -16,7 +16,9 @@ import { changeStageAction } from "./actions";
 // whether the deal has a probabilityOverride, which this row shape doesn't carry (only the already-
 // resolved value), so a client-side guess could show a number that's briefly wrong in a way a stale
 // one wouldn't be. The card's stage/column updates immediately; router.refresh() settles the exact
-// weighted value from the server within the same round trip.
+// weighted value from the server within the same round trip. daysInCurrentStage has the identical
+// property (a real transition resets it to 0, but only once M2.1's changeStage-written stage_events
+// row exists) and is left equally unrecomputed for the same reason - momentarily stale, never wrong.
 export function PipelineBoard({
   deals: initialDeals,
   stages,
@@ -166,6 +168,9 @@ function BoardColumn({
               {deal.reference} · {deal.accountName}
             </p>
             <p className="text-xs text-muted">{deal.ownerName ?? "Unowned"}</p>
+            <p className="text-xs text-muted">
+              {deal.daysInCurrentStage} {deal.daysInCurrentStage === 1 ? "day" : "days"} in stage
+            </p>
             {deal.value ? <p className="mt-1 text-xs text-ink">{formatMoney(deal.value)}</p> : null}
           </div>
         ))}
