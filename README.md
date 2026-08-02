@@ -12,7 +12,7 @@ Start here, in order:
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
    **M2 — Engagement history is complete** (staleness colour, M2.3's other half, is deliberately
    deferred to M3.7 — see the `## M2` section below). Current milestone: **M3 — Engagement
-   timeline** ⚑, through task M3.2 — see the `## M3` section below.
+   timeline** ⚑, through task M3.3 — see the `## M3` section below.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -646,6 +646,30 @@ one audit row, an internal activity that's logged but doesn't advance `last_enga
 to confirm idempotency. Typecheck, lint, unit (167, 2 new for `dateInTimezone`), RLS (146 total, the
 6 new above), integration (39 total across all four real-project spec files), and the full Playwright
 e2e suite (11, unchanged) all green.
+
+**M3.3** ⚑ (RLS policy for activity insert, with the named test "a user holding only the bde role
+can create an activity on a deal they own") is test-only, closing out the migration side of this
+milestone - `docs/02-permission-matrix.md`'s `activity.*` scope was already fully implemented in
+`src/auth/permissions.ts` since M0.4, and `activities_insert` (migration 0008) already enforced the
+same shape independently, so no application or migration code changed here. New
+`tests/rls/activities_permission_matrix.spec.ts` is the exhaustive per-role x per-resource-shape
+matrix mirroring `tests/rls/deals_permission_matrix.spec.ts`'s own structure exactly - the same
+M1.1-to-M1.8 relationship applied to activities, `tests/rls/activities.spec.ts` (M3.1) having
+already covered the foundational scope and named cases.
+
+The one shape worth calling out, proven rather than assumed: `activities_select` mirrors
+`deals_select` (practice-wide **read** for every scoped role), but `activities_insert` mirrors
+`deals_UPDATE`, not `deals_select` - a `bde` may read every activity in their practice but may only
+*create* one on a deal they own/co-own/authored. `bdeA2` (a practice colleague, not the deal's
+owner) is a clean per-column example of this: `true` for select, `false` for insert, in the same
+test run against the same fixture deal. The exact named regression string from the backlog appears
+verbatim as its own test, at the RLS level - `tests/permissions/matrix.spec.ts` already proves the
+application-layer half.
+
+Verified: typecheck, lint, unit (167, unchanged - no application code touched), RLS (160 tests
+total, the 14 new above alongside every existing suite, including the exact named regression
+string). Integration and e2e suites are unaffected (no application, service, data, or migration
+code changed this task) and were not re-run beyond the previous task's already-green results.
 
 ## Commands
 
