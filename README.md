@@ -10,8 +10,9 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
-   Current milestone: **M2 — Engagement history**, through task M2.4. **M2 is complete** (staleness
-   colour, M2.3's other half, is deliberately deferred to M3.7 — see the `## M2` section below).
+   **M2 — Engagement history is complete** (staleness colour, M2.3's other half, is deliberately
+   deferred to M3.7 — see the `## M2` section below). Current milestone: **M3 — Engagement
+   timeline** ⚑, through task M3.1 — see the `## M3` section below.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -525,6 +526,76 @@ unchanged, same seeded-tenant-has-zero-deals limitation as M2.3), and a manual b
 the real `m1-4-integration-test` fixture tenant confirming the rendered panel: correct DD/MM/YYYY
 dates, human-readable durations ("6 minutes", "under a minute"), and no false "Regression" badges
 on what is, in this fixture, an unbroken run of forward transitions.
+
+## M3 — Engagement timeline ⚑ (the reason the product exists)
+
+**M3.1** (`activities`, `activity_revisions` migrations) is implemented and verified, both locally
+and against the real hosted project.
+
+Two deliberate deviations from the backlog line's literal wording, called out rather than silently
+worked around or silently followed:
+
+1. The backlog also names a third table, `activity_contacts` - but its `contact_id` references
+   `contacts(id)`, and `contacts` doesn't exist in this codebase until M5.5. A table cannot
+   reference a table that isn't there. `activity_contacts` is deferred to M5.7 ("Activity
+   attribution to contacts") - the same deliverable, scheduled for when its dependency is real, not
+   invented around with a placeholder FK.
+2. The `last_engaged_at`/`engagement_count`-maintaining trigger `db/schema.sql` itself bundles into
+   the activities section is deliberately **not** built here - `docs/07-build-backlog.md` splits
+   that out explicitly as M3.2's job ("`logActivity` service: the single creation path, deriving
+   `last_engaged_at`, `engagement_count`... in one transaction"). This migration is the table
+   structure only.
+
+New enums `activity_type`/`activity_source`/`disposition`, matching `db/schema.sql` exactly.
+`is_client_facing` is a genuine Postgres `generated` column this time (unlike `stage_events`'s
+`is_regression` in M2.1) - it only ever compares the same row's own `type` column, so no trigger
+workaround is needed. A `before insert` trigger captures `stage_id_at_time` from the deal's current
+stage, authoritative regardless of what a caller passes - the same trigger-is-authoritative pattern
+migrations 0006/0007 already established for `updated_at`/`duration_in_previous_seconds`.
+
+RLS mirrors `deals_select`/`deals_update`'s scope shape via migration 0005's existing
+`deal_practice_line_id()`/`deal_owner_id()`/`deal_author_id()`/`is_deal_co_owner()` helpers - no new
+helper functions needed, and (verified directly, not merely reasoned about) no RLS recursion between
+`activities` and `activity_revisions` despite the latter's `select` policy joining into the former,
+since only one direction of that relationship needs the other table's data.
+
+The one genuinely interesting scope shape: `activity.update` is uniformly "the author only, within
+24 hours" for **every** role, including `tenant_admin` - unlike `deals`, no role may edit someone
+else's activity at all. Correcting another author's entry is `activity.retract`
+(`docs/02-permission-matrix.md`: director/tenant_admin only, no time limit) - a materially broader
+permission this migration's `activities_update` policy deliberately does not grant. Flagged as a
+known, anticipated gap for M3.6 to close: the same "RLS is coarse, the fine-grained rule lives in a
+dedicated service path" reasoning `tests/rls/deals_permission_matrix.spec.ts` already documents for
+`deal.change_owner` applies here - `retractActivity` will need its own service-role-backed write
+path, not an extension of this `USING` clause.
+
+`activity_date_not_future`'s `check (activity_date <= current_date)` is deliberately left as a
+coarse, defense-in-depth backstop, not the precise rule: Postgres's `current_date` is evaluated in
+the database's own session timezone (UTC), not the acting user's, the exact class of imprecision
+CLAUDE.md #8 exists to prevent (a WAT user's "today" can already be one calendar day ahead of
+UTC's). The precise, timezone-aware check - using the actor's own resolved timezone via
+`src/lib/dates.ts`, the same infrastructure M2.3/M2.4 built - is `logActivity`'s job (M3.2), the
+same "RLS is a second, independent control, never the only one" layering CLAUDE.md #1 already
+establishes for authorisation, generalised here to date validation.
+
+No application code changes yet - `src/auth/permissions.ts`'s `activity.*` entries (including the
+named regression test, "a user holding only the bde role can create an activity on a deal they
+own") were already built in M0.4, ahead of the table existing, and needed no changes.
+
+New `tests/rls/activities.spec.ts` (28 tests) covers: `stage_id_at_time` capture (including that
+the trigger overrides a deliberately-wrong caller-supplied value), `is_client_facing` for every one
+of the eight activity types, the `activity_date_not_future`/empty-summary/`retraction_needs_reason`
+constraints, `activities_select`'s practice/tenant scope (including D-06's executive full-narrative
+read), `activities_insert`'s scope for every role (including the RLS-level version of the named
+regression guard), `activities_update`'s author-only-within-24h shape (including that even
+`tenant_admin` cannot edit someone else's entry, and that the window genuinely closes), and
+`activity_revisions`' immutability/read-scope/no-insert-policy shape.
+
+Verified: migration tested forward and backward against local Postgres, then applied to the real
+hosted project via the Supabase Management API (`schema_migrations` there now lists `0001` through
+`0008`) - see `db/migrations/README.md`. Typecheck, lint, unit (165, unchanged - no application code
+touched this milestone), RLS (140 tests total, the 28 new above alongside every existing suite), and
+the full Playwright e2e suite (11, unchanged) all green.
 
 ## Commands
 

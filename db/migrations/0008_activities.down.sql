@@ -1,0 +1,12 @@
+drop trigger if exists trg_no_update_activity_revisions on activity_revisions;
+drop policy if exists activity_revisions_select on activity_revisions;
+drop policy if exists activities_update on activities;
+drop policy if exists activities_insert on activities;
+drop policy if exists activities_select on activities;
+drop trigger if exists trg_activities_before_insert on activities;
+drop function if exists activities_before_insert();
+drop table if exists activity_revisions;
+drop table if exists activities;
+drop type if exists disposition;
+drop type if exists activity_source;
+drop type if exists activity_type;
