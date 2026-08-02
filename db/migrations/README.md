@@ -105,3 +105,13 @@ layer exists yet - that's M4.2+), so `tests/rls/tasks.spec.ts` (34 tests, agains
 the primary verification, the same shape every earlier schema-only migration in this repo
 (`0002_tenancy`/`0003_rls_foundation`, `0007_stage_events` before M2.2's `changeStage` wiring) used
 before its own service layer existed to exercise against the real hosted project.
+
+`0012_notifications` was applied to the hosted project the same way - forward/backward-tested
+locally first, then applied for real; `schema_migrations` there now lists `0001` through `0012`.
+Authored from scratch, unlike `0011_tasks`: `db/schema.sql` has no `notifications` table at all to
+diff against, so its RLS shape (recipient-only, no `tenant_admin`/`executive` tenant-wide override,
+no insert policy for `authenticated`) is this migration's own design, reasoned from
+`docs/01-domain-model.md` and this codebase's `audit_entries` precedent rather than found as a gap
+in a reference implementation. `tests/rls/notifications.spec.ts` (8 tests, against local Postgres)
+covers it directly; `tests/integration/assign-task.spec.ts` (M4.2, 8 tests, against the real hosted
+project) exercises the real insert path end to end via `assignTask`'s service-role write.

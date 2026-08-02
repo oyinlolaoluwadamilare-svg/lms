@@ -1152,6 +1152,76 @@ service layer exists yet to exercise against the real hosted project), and the f
 suite (11, unchanged) all green. Migration tested forward and backward against local Postgres before
 being applied for real; `schema_migrations` on the hosted project now lists `0001` through `0011`.
 
+**M4.2** (`assignTask` as the single assignment path, writing the ledger entry and notification) is
+implemented and verified.
+
+No `notifications` table existed anywhere - `db/schema.sql` has none to diff against, unlike
+`0011_tasks`'s near-complete reference kit - so migration `0012_notifications` is authored directly
+from `docs/01-domain-model.md` plus this codebase's own established patterns:
+
+- `event_type`/`entity_type` are plain `text`, not enums, matching `audit_entries`'s own identical
+  choice - the domain model's own wording ("include... alongside") describes an open-ended, growing
+  vocabulary of event types spanning many future milestones, unlike closed enums like `task_status`.
+- RLS is deliberately **narrower** than every other tenant-scoped table in this codebase:
+  `recipient_id = auth.uid()` only, with **no** `tenant_admin`/`executive` tenant-wide override -
+  `docs/02-permission-matrix.md` has no `notification.view` action at all, for any role, and
+  inventing tenant-wide visibility into other users' personal notifications would be an unjustified
+  overreach, not a defensible extension of an existing documented scope.
+- No insert policy for `authenticated` at all - a notification is always a side effect of some other
+  privileged write (this milestone's `assignTask`, later M4.7/M4.8), delivered via a service-role
+  client, the same shape `writeAudit` already uses. A self-service `notifications_mark_read` update
+  policy does exist, since marking one's own notification read is a genuinely different (non-
+  privileged) kind of write, and never touches `recipient_id` - so it can never hit migration 0010's
+  own SELECT-policy-re-validates-the-new-row trap.
+
+`assignTask` (`src/services/tasks.ts`) operates on an **existing** task only (reassignment) - every
+task already has an assignee from creation (`tasks.assignee_id not null`), so there is no separate
+"first assignment" path to build. It checks `task.reassign` via `can()`, deliberately **not**
+`task.assign_to_other` - the latter is a different action (creating/adding a new assignment), whose
+"practice" grant for bde carries footnote 3 ("co-owners, own team lead, practice peers"), a scope
+`src/auth/permissions.ts`'s `Resource` shape cannot express today. `task.reassign`'s own scope
+(assigned/practice/tenant/null per role) is exactly what reassignment needs and is already fully
+expressible with today's `Resource` shape (`assigneeId`/`assignedById`/`practiceLineId`, the last
+resolved through the task's deal via a nested Supabase embed) - no gap there. The gap this **does**
+leave, disclosed rather than silently invented: nothing validates that the new assignee is a
+co-owner/team-lead/practice-peer of the actor per footnote 3's richer rule for *who* a task may land
+on - only that the new assignee is a real, active user in the same tenant (a data-integrity check,
+reusing `getUserByAuthId`, not a business-scope one). Closing that gap needs either a new
+`ScopeToken` or a bespoke resource field this milestone does not invent unasked.
+
+`assigned_by` is set to the reassigning actor on every call (not left unchanged) - both for correct
+"who most recently assigned this" semantics, and so the resulting row still satisfies
+`tasks_update`'s own RLS check via its `assigned_by = auth.uid()` branch even when the actor
+reassigns a task away from themselves (losing the `assignee_id = auth.uid()` branch) - the same
+"does the row I'm about to produce still satisfy my own policy" question migration 0010's
+`documents_soft_delete` discovery taught this codebase to ask up front, verified directly by the
+integration test where a bde reassigns their own task to someone else. The reassignment write itself
+goes through the caller's own RLS-scoped session (`tasks_update`, migration 0011) - unlike
+`activity.retract`, `task.reassign`'s scope already matches `tasks_update`'s own USING clause
+exactly, so no service-role client is needed for that write. The `task_assignments` ledger row and
+the `notifications` row are both written via a service-role client (no insert policy exists for
+`authenticated` on either table), followed by a `writeAudit` call.
+
+New `tests/integration/assign-task.spec.ts` (8 tests, against the real hosted project, seeding tasks
+directly via the service-role client since no `createTask` service exists yet): a successful
+reassignment writes the ledger row, the notification, and the audit row, and moves `assigned_by` to
+the actor; reassigning to the current assignee is `same_assignee` with no writes; a practice peer who
+is neither the assignee nor the assigner can see the task (practice-scoped `tasks_select`) but is
+genuinely `denied` reassigning it (`task.reassign`'s narrower `assigned`-only scope for bde); a
+practice director can reassign via the practice-wide scope; a director outside the practice gets
+`not_found`, same as every other cross-practice case; a nonexistent task id is `not_found`; an
+invalid new-assignee id is `invalid_assignee`, not a thrown FK error; and a deal-less personal task
+can still be reassigned by its own assignee. `tests/rls/notifications.spec.ts` (8 tests, against
+local Postgres) covers migration 0012 directly: recipient-only visibility (including proving a
+same-tenant `tenant_admin` still can't see someone else's notification), no insert for `authenticated`
+at all, self-service mark-read, and no hard-delete path.
+
+Verified: typecheck, lint, unit (206, unchanged), RLS (220, 8 new), integration (77, 8 new, against
+the real hosted project), and the full Playwright e2e suite (11, unchanged - no UI built yet, that's
+M4.3+) all green. Migration `0012_notifications` tested forward and backward against local Postgres
+before being applied for real; `schema_migrations` on the hosted project now lists `0001` through
+`0012`.
+
 ## Commands
 
 ```
