@@ -1341,6 +1341,76 @@ and the full Playwright e2e suite (11, unchanged) all green. Migration `0013_nex
 tested forward and backward against local Postgres before being applied for real; `schema_migrations`
 on the hosted project now lists `0001` through `0013`.
 
+**M4.5** (My Work screen: grouped queue, inline complete, snooze with reason after two snoozes,
+reassign, plus the "Assigned by me" tab) is implemented and verified. No new migration - this is
+entirely application/UI layer on top of what M4.1-M4.4 already built.
+
+Two scope decisions this milestone had to make with no doc to point to, both made with reasoned
+judgment and flagged in code rather than blocked on:
+
+- **Where does a snooze's reason live?** `docs/01-domain-model.md`'s own tasks field list has
+  `snooze_count` but no `snooze_reason` column - migration 0011's own comment deferred that decision
+  to this milestone explicitly. A task can be snoozed many times, and a single column would only
+  ever hold the LATEST reason, silently discarding every earlier one - unlike `activity.retract`'s
+  one-time terminal `retraction_reason` column, snoozing is repeatable. Decided: no new column at
+  all - each snooze's reason is written to `audit_entries` (action `task.snooze`), which is already
+  append-only and exists precisely for "every state change writes an audit row" (CLAUDE.md #6). This
+  means M4.5 needed **zero new migrations**.
+- **What does "snooze" actually validate?** `newDueDate` must be strictly later than the task's
+  current `due_date` - a "snooze" that moves a date earlier or leaves it unchanged is a plain edit,
+  not a snooze (no "edit task" feature exists yet to route that through instead). `docs/04-metric-
+  definitions.md`'s own "On-time completion rate" formula (`completed_at::date <= due_date`)
+  references `due_date` in the present tense with no "original" qualifier, which is the textual
+  signal this decision leans on: snoozing directly mutates `due_date` rather than needing a second
+  `snoozed_until` column to preserve an original commitment date.
+
+`src/domain/task.ts` gained `taskQueueGroup` (the five buckets docs/06-ui-spec.md names - "This
+week" has no documented boundary anywhere, interpreted as a rolling 7-day window from today, the
+same kind of undocumented-cutoff judgment call `stalenessBand`'s own bands already made) and
+`snoozeReasonRequired` (the single shared "after two snoozes" definition the service layer and the
+UI both use, so there is exactly one place that says "2"). `getTaskForAuthorization` (`src/data/
+tasks.ts`) gained `status`/`dueDate`/`snoozeCount`, needed by the two new service functions:
+`completeTask` (checks `task.complete`, sets `status`/`completed_at`/`completed_by` together,
+satisfying migration 0011's own `done_needs_completion` constraint) and `snoozeTask` (checks
+`task.update` - `docs/02-permission-matrix.md` has no distinct `task.snooze` action - validates
+`must_be_later`, enforces `snoozeReasonRequired`, writes the reason to `audit_entries`).
+`listMyWork` explicitly filters by `assignee_id`/`assigned_by` rather than relying on
+`tasks_select`'s own broader practice-wide RLS visibility - a team_lead/director's "my work" must
+never include a colleague's task just because their role could also see it. `getReassignContext`
+mirrors `getAddTaskContext`'s shape but is fetched **on demand, per task** (a server action called
+when a row's own Reassign control opens), since My Work lists tasks across many different deals/
+practices in one queue - there is no single practice-scoped picker to pre-fetch for the whole page;
+a deal-less task falls back to `listAssignableUsersForTenant` (built in M4.3 specifically for this
+entry point).
+
+The "Team" tab named in `docs/06-ui-spec.md`'s My Work section is deliberately **not** built here -
+it is M4.6's own backlog line ("Team view for Team Lead and Director with per-person open, overdue
+and completed counts"), the same vertical-slice-per-backlog-line discipline this project has kept
+throughout.
+
+New `tests/unit/task.spec.ts` (8 tests) covers `taskQueueGroup`'s five buckets and
+`snoozeReasonRequired`'s boundary. New `tests/integration/my-work.spec.ts` (10 tests, against the
+real hosted project): `completeTask` sets status/completed_at/completed_by and writes one audit row,
+rejects an already-done task, and denies a practice peer who is neither assignee nor assigner;
+`snoozeTask` allows two reason-free snoozes then requires one on the third (and asserts the actual
+reason text landed in `audit_entries`), rejects a same-or-earlier date, and rejects snoozing a
+cancelled task; `listMyWork` correctly separates "assigned to me" from "assigned by me"; and
+`getReassignContext` returns a practice-scoped picker, denies an out-of-scope viewer, and falls back
+to a tenant-wide picker for a deal-less task.
+
+Manual browser QA (real dev server, real hosted project, a dedicated `manual-qa-m4-5` tenant kept
+separate from every automated fixture this time - the previous milestone's QA session collided with
+`next-action.spec.ts`'s own fixture deal, a lesson applied here): grouped queue renders Overdue (red)/
+Due today/This week/Later correctly across a real mix of tasks; the snooze dialog's reason field
+appears only from the third snooze onward, and the "reason required" error and successful save both
+verified; inline complete removes a task from the queue; reassign fetches its picker on open and
+correctly moves the task, visible immediately on the "Assigned by me" tab; the tab switch itself
+verified via a direct URL navigation after an initial screenshot caught a client-navigation timing
+artifact (not a real bug - confirmed by re-checking with `page.goto` directly).
+
+Verified: typecheck, lint, unit (218, 8 new), RLS (220, unchanged), integration (103, 10 new), and
+the full Playwright e2e suite (11, unchanged) all green.
+
 ## Commands
 
 ```

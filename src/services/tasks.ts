@@ -1,17 +1,27 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Actor, type Resource } from "@/auth/permissions";
-import { applyTaskReassignment, getTaskForAuthorization, insertTask, insertTaskAssignment } from "@/data/tasks";
+import {
+  applyTaskCompletion,
+  applyTaskReassignment,
+  applyTaskSnooze,
+  getTaskForAuthorization,
+  insertTask,
+  insertTaskAssignment,
+  listMyWorkTasks,
+  type TaskQueueItem,
+} from "@/data/tasks";
 import { insertNotification } from "@/data/notifications";
-import { getUserByAuthId, listAssignableUsersForPractice, type AssignableUser } from "@/data/users";
+import { getUserByAuthId, listAssignableUsersForPractice, listAssignableUsersForTenant, type AssignableUser } from "@/data/users";
 import { getDealForAuthorization } from "@/data/deals";
 import { createServiceClient } from "@/lib/supabase/service";
 import { writeAudit } from "@/services/audit";
-import type { TaskPriority } from "@/domain/task";
+import { snoozeReasonRequired, type TaskPriority } from "@/domain/task";
 
-// Re-exported for `app` callers (AddTaskModal.tsx, LogActivityModal.tsx) - the layering guardrail
-// (eslint.config.mjs's boundaries/element-types) forbids `app` importing from `data` directly, the
-// same reasoning every other app-facing type in this codebase flows through its own service module.
-export type { AssignableUser };
+// Re-exported for `app` callers (AddTaskModal.tsx, LogActivityModal.tsx, my-work/page.tsx) - the
+// layering guardrail (eslint.config.mjs's boundaries/element-types) forbids `app` importing from
+// `data` directly, the same reasoning every other app-facing type in this codebase flows through
+// its own service module.
+export type { AssignableUser, TaskQueueItem };
 
 export type AssignTaskResult = { ok: true } | { ok: false; code: "not_found" | "denied" | "same_assignee" | "invalid_assignee" };
 
@@ -232,4 +242,154 @@ export async function getAddTaskContext(supabase: SupabaseClient, actor: Actor, 
 
   const assignableUsers = await listAssignableUsersForPractice(supabase, deal.tenantId, deal.practiceLineId);
   return { canAddTask: true, assignableUsers };
+}
+
+export type CompleteTaskResult = { ok: true } | { ok: false; code: "not_found" | "denied" | "already_done" | "cancelled" };
+
+// docs/07-build-backlog.md M4.5's "inline complete". task.complete's scope (docs/02-permission-
+// matrix.md: assigned+own for bde - assignee OR assigner; practice for team_lead/director; tenant
+// for tenant_admin) happens to be the identical token set as task.update's for every role in this
+// matrix, so there is no separate RLS gap to worry about here beyond tasks_update's own USING clause
+// (migration 0011) - the same reasoning migration 0011's own comment already gives for why RLS
+// cannot (and does not need to) distinguish task.complete from task.update/task.cancel at the
+// database layer.
+export async function completeTask(supabase: SupabaseClient, actor: Actor, taskId: string): Promise<CompleteTaskResult> {
+  const task = await getTaskForAuthorization(supabase, taskId);
+  if (!task) return { ok: false, code: "not_found" };
+
+  if (
+    !can(actor, "task.complete", {
+      tenantId: task.tenantId,
+      practiceLineId: task.practiceLineId ?? undefined,
+      assigneeId: task.assigneeId,
+      assignedById: task.assignedById,
+    })
+  ) {
+    return { ok: false, code: "denied" };
+  }
+
+  if (task.status === "done") return { ok: false, code: "already_done" };
+  if (task.status === "cancelled") return { ok: false, code: "cancelled" };
+
+  await applyTaskCompletion(supabase, taskId, actor.id);
+
+  await writeAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.id,
+    entityType: "task",
+    entityId: taskId,
+    action: "task.complete",
+    before: { status: task.status },
+    after: { status: "done" },
+  });
+
+  return { ok: true };
+}
+
+export type SnoozeTaskResult =
+  | { ok: true }
+  | { ok: false; code: "not_found" | "denied" | "already_done" | "cancelled" | "must_be_later" | "reason_required" };
+
+// docs/07-build-backlog.md M4.5's "snooze with reason after two snoozes" - checked via task.update
+// (the same reasoning completeTask's own comment gives: docs/02-permission-matrix.md has no
+// distinct "task.snooze" action at all, and snoozing is fundamentally a due_date field edit).
+//
+// Two scope decisions this milestone had to make with no doc to point to, both flagged rather than
+// silently invented: (1) `newDueDate` must be strictly later than the task's CURRENT due_date - a
+// "snooze" that moves a date earlier or leaves it unchanged isn't a snooze, it's a plain edit (no
+// "edit task" feature exists yet in this codebase to route that through instead); (2) the reason
+// text is written to audit_entries (action "task.snooze"), not a new `snooze_reason` column - a
+// task can be snoozed many times, and a single column would only ever hold the latest reason,
+// silently discarding every earlier one, unlike activity.retract's one-time terminal
+// retraction_reason column. src/domain/task.ts's snoozeReasonRequired is the single shared
+// definition of "after two snoozes" the UI uses too, so there is exactly one place that says "2".
+export async function snoozeTask(
+  supabase: SupabaseClient,
+  actor: Actor,
+  taskId: string,
+  newDueDate: string,
+  reason: string | null,
+): Promise<SnoozeTaskResult> {
+  const task = await getTaskForAuthorization(supabase, taskId);
+  if (!task) return { ok: false, code: "not_found" };
+
+  if (
+    !can(actor, "task.update", {
+      tenantId: task.tenantId,
+      practiceLineId: task.practiceLineId ?? undefined,
+      assigneeId: task.assigneeId,
+      assignedById: task.assignedById,
+    })
+  ) {
+    return { ok: false, code: "denied" };
+  }
+
+  if (task.status === "done") return { ok: false, code: "already_done" };
+  if (task.status === "cancelled") return { ok: false, code: "cancelled" };
+  if (newDueDate <= task.dueDate) return { ok: false, code: "must_be_later" };
+
+  const trimmedReason = reason?.trim() || null;
+  if (snoozeReasonRequired(task.snoozeCount) && !trimmedReason) {
+    return { ok: false, code: "reason_required" };
+  }
+
+  const newSnoozeCount = task.snoozeCount + 1;
+  await applyTaskSnooze(supabase, taskId, newDueDate, newSnoozeCount);
+
+  await writeAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.id,
+    entityType: "task",
+    entityId: taskId,
+    action: "task.snooze",
+    before: { dueDate: task.dueDate, snoozeCount: task.snoozeCount },
+    after: { dueDate: newDueDate, snoozeCount: newSnoozeCount, reason: trimmedReason },
+  });
+
+  return { ok: true };
+}
+
+// The My Work screen's two tabs (docs/07-build-backlog.md M4.5: "plus the 'Assigned by me' tab" -
+// "Assigned to me" is the implicit default every other role-scoped screen in this codebase already
+// treats as the primary view). No can() check here: "my own tasks" (by explicit assignee_id/
+// assigned_by match, not by role-derived practice scope) is inherently self-scoped, the same
+// reasoning analytics.view_own's "self" token already encodes elsewhere in the permission matrix -
+// there is no privileged action to authorise beyond "is this session active", which the caller's own
+// RLS session already establishes.
+export async function listMyWork(supabase: SupabaseClient, actor: Actor, tab: "assigned_to_me" | "assigned_by_me"): Promise<TaskQueueItem[]> {
+  return listMyWorkTasks(supabase, actor.id, tab === "assigned_to_me" ? "assignee" : "assigner");
+}
+
+export interface ReassignContext {
+  canReassign: boolean;
+  assignableUsers: AssignableUser[];
+}
+
+// For My Work's inline "Reassign" action (M4.5): unlike the Add Task modal (M4.3, one deal per
+// page load) or the deal detail header (one deal per page), My Work lists tasks across MANY
+// different deals/practices in a single queue - there is no single practice-scoped picker to
+// pre-fetch for the whole page. Fetched on demand, per task, only when its own Reassign control is
+// opened (mirroring getAddTaskContext's shape, but scoped by TASK via getTaskForAuthorization
+// instead of by deal via getDealForAuthorization, and checking task.reassign instead of
+// task.create).
+export async function getReassignContext(supabase: SupabaseClient, actor: Actor, taskId: string): Promise<ReassignContext> {
+  const task = await getTaskForAuthorization(supabase, taskId);
+  if (!task) return { canReassign: false, assignableUsers: [] };
+
+  const canReassign = can(actor, "task.reassign", {
+    tenantId: task.tenantId,
+    practiceLineId: task.practiceLineId ?? undefined,
+    assigneeId: task.assigneeId,
+    assignedById: task.assignedById,
+  });
+  if (!canReassign) return { canReassign: false, assignableUsers: [] };
+
+  // A deal-less task has no practice to scope the picker by - fall back to the tenant-wide listing
+  // (src/data/users.ts's own listAssignableUsersForTenant, built in M4.3 specifically for "the
+  // my-work/global 'Add Task' entry point M4.5 will add" - this is that entry point) rather than
+  // leaving the picker empty and unusable.
+  const assignableUsers = task.practiceLineId
+    ? await listAssignableUsersForPractice(supabase, task.tenantId, task.practiceLineId)
+    : await listAssignableUsersForTenant(supabase, task.tenantId);
+  return { canReassign: true, assignableUsers };
 }

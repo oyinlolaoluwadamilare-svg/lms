@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { TaskPriority } from "@/domain/task";
+import type { TaskPriority, TaskStatus } from "@/domain/task";
 
 export interface TaskForAuthorization {
   id: string;
@@ -8,6 +8,9 @@ export interface TaskForAuthorization {
   assigneeId: string;
   assignedById: string;
   practiceLineId: string | null;
+  status: TaskStatus;
+  dueDate: string;
+  snoozeCount: number;
 }
 
 interface TaskForAuthorizationRow {
@@ -16,24 +19,31 @@ interface TaskForAuthorizationRow {
   deal_id: string | null;
   assignee_id: string;
   assigned_by: string;
+  status: TaskStatus;
+  due_date: string;
+  snooze_count: number;
   deal: { practice_line_id: string } | null;
 }
 
-// For assignTask's authorisation check (src/services/tasks.ts) - mirrors getActivityForAuthorization's
-// shape. practiceLineId is resolved through the task's deal (tasks has no own practice_line_id
-// column, migration 0011) via a nested embed on deals - RLS-safe because tasks_select already
-// requires the caller to be entitled to the deal's practice line whenever deal_id is set, so this
-// embed can never surface a deal the caller couldn't otherwise see. A null dealId yields a null
-// practiceLineId, which tokenMatches's "practice" branch never matches - only the tenant-wide/
-// assigned/assigned_by tokens apply to a deal-less personal task, the same scope shape migration
-// 0011's own tasks_select RLS policy already enforces at the database layer. Reads through the
-// caller's own RLS-scoped session (tasks_select) - null means either the task doesn't exist, is
-// soft-deleted, or isn't visible to this actor, the same not-confirming-existence reasoning every
-// other not_found case in this codebase already uses.
+// For assignTask/completeTask/snoozeTask's authorisation checks (src/services/tasks.ts) - mirrors
+// getActivityForAuthorization's "one getter, several callers with an identical need" shape.
+// practiceLineId is resolved through the task's deal (tasks has no own practice_line_id column,
+// migration 0011) via a nested embed on deals - RLS-safe because tasks_select already requires the
+// caller to be entitled to the deal's practice line whenever deal_id is set, so this embed can never
+// surface a deal the caller couldn't otherwise see. A null dealId yields a null practiceLineId,
+// which tokenMatches's "practice" branch never matches - only the tenant-wide/assigned/assigned_by
+// tokens apply to a deal-less personal task, the same scope shape migration 0011's own tasks_select
+// RLS policy already enforces at the database layer. Reads through the caller's own RLS-scoped
+// session (tasks_select) - null means either the task doesn't exist, is soft-deleted, or isn't
+// visible to this actor, the same not-confirming-existence reasoning every other not_found case in
+// this codebase already uses. status/dueDate/snoozeCount (M4.5) are here too since completeTask and
+// snoozeTask both need them for their own business-rule checks (already-done/already-cancelled,
+// must-be-later, reason-required-after-two-snoozes) - the same "fetch once, several callers need the
+// same extra columns" reasoning that added lastEngagedAt to getDealDetail rather than a new query.
 export async function getTaskForAuthorization(supabase: SupabaseClient, taskId: string): Promise<TaskForAuthorization | null> {
   const { data, error } = await supabase
     .from("tasks")
-    .select("id, tenant_id, deal_id, assignee_id, assigned_by, deal:deals!deal_id(practice_line_id)")
+    .select("id, tenant_id, deal_id, assignee_id, assigned_by, status, due_date, snooze_count, deal:deals!deal_id(practice_line_id)")
     .eq("id", taskId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -49,6 +59,9 @@ export async function getTaskForAuthorization(supabase: SupabaseClient, taskId: 
     assigneeId: row.assignee_id,
     assignedById: row.assigned_by,
     practiceLineId: row.deal?.practice_line_id ?? null,
+    status: row.status,
+    dueDate: row.due_date,
+    snoozeCount: row.snooze_count,
   };
 }
 
@@ -136,4 +149,96 @@ export async function insertTaskAssignment(
   });
 
   if (error) throw new Error(`insertTaskAssignment failed: ${error.message}`);
+}
+
+// docs/07-build-backlog.md M4.5's "inline complete" - reads/writes through the CALLER's own
+// RLS-scoped session (tasks_update, migration 0011), the same reasoning applyTaskReassignment's own
+// comment gives: task.complete's scope already matches tasks_update's USING clause, no service-role
+// client needed. Sets both completed_at/completed_by together, satisfying migration 0011's own
+// done_needs_completion check constraint in the same statement.
+export async function applyTaskCompletion(supabase: SupabaseClient, taskId: string, completedBy: string): Promise<void> {
+  const { error } = await supabase
+    .from("tasks")
+    .update({ status: "done", completed_at: new Date().toISOString(), completed_by: completedBy })
+    .eq("id", taskId);
+
+  if (error) throw new Error(`applyTaskCompletion failed: ${error.message}`);
+}
+
+// docs/07-build-backlog.md M4.5's "snooze with reason after two snoozes" - same caller-session
+// write shape as applyTaskCompletion/applyTaskReassignment. The reason itself is not stored as a
+// column on tasks (no such column exists, and none is added by this milestone - see
+// src/services/tasks.ts's snoozeTask for why): it is written to audit_entries instead, via the
+// caller's own writeAudit call, since a task can be snoozed many times and a single overwritable
+// column would lose every reason but the most recent one, unlike activity.retract's one-time
+// terminal retraction_reason column.
+export async function applyTaskSnooze(supabase: SupabaseClient, taskId: string, newDueDate: string, newSnoozeCount: number): Promise<void> {
+  const { error } = await supabase.from("tasks").update({ due_date: newDueDate, snooze_count: newSnoozeCount }).eq("id", taskId);
+
+  if (error) throw new Error(`applyTaskSnooze failed: ${error.message}`);
+}
+
+export interface TaskQueueItem {
+  id: string;
+  title: string;
+  dueDate: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  snoozeCount: number;
+  assigneeId: string;
+  assigneeName: string;
+  dealId: string | null;
+  dealName: string | null;
+  accountName: string | null;
+}
+
+interface TaskQueueRow {
+  id: string;
+  title: string;
+  due_date: string;
+  priority: TaskPriority;
+  status: TaskStatus;
+  snooze_count: number;
+  assignee_id: string;
+  assignee: { full_name: string } | null;
+  deal: { id: string; name: string; account: { name: string } | null } | null;
+}
+
+// The My Work screen's queue (docs/07-build-backlog.md M4.5: "grouped queue... plus the 'Assigned by
+// me' tab"). `scope` picks which of the two tabs this call is for - explicitly filtered by
+// assignee_id/assigned_by, NOT left to tasks_select's own broader RLS visibility alone: a
+// team_lead/director's tasks_select is practice-wide (any task in an entitled practice), but "my
+// work" is a PERSONAL queue - "assigned to me" must never include a colleague's task just because
+// the viewer could also see it via practice entitlement. Reads through the caller's own RLS-scoped
+// session; open/in_progress/blocked only (done/cancelled tasks don't belong in an open work queue).
+// Ordered by due_date so the grouping this function's caller does (src/domain/task.ts's
+// taskQueueGroup) sees overdue/due-soonest tasks first within each bucket.
+export async function listMyWorkTasks(supabase: SupabaseClient, userId: string, scope: "assignee" | "assigner"): Promise<TaskQueueItem[]> {
+  let query = supabase
+    .from("tasks")
+    .select(
+      "id, title, due_date, priority, status, snooze_count, assignee_id, " +
+        "assignee:users!assignee_id(full_name), deal:deals!deal_id(id, name, account:accounts!account_id(name))",
+    )
+    .is("deleted_at", null)
+    .in("status", ["open", "in_progress", "blocked"]);
+
+  query = scope === "assignee" ? query.eq("assignee_id", userId) : query.eq("assigned_by", userId);
+
+  const { data, error } = await query.order("due_date", { ascending: true });
+  if (error) throw new Error(`listMyWorkTasks failed: ${error.message}`);
+
+  return (data as unknown as TaskQueueRow[]).map((row) => ({
+    id: row.id,
+    title: row.title,
+    dueDate: row.due_date,
+    priority: row.priority,
+    status: row.status,
+    snoozeCount: row.snooze_count,
+    assigneeId: row.assignee_id,
+    assigneeName: row.assignee?.full_name ?? "Unknown",
+    dealId: row.deal?.id ?? null,
+    dealName: row.deal?.name ?? null,
+    accountName: row.deal?.account?.name ?? null,
+  }));
 }
