@@ -11,6 +11,7 @@ import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
+import { AttachmentLink } from "./AttachmentLink";
 import { EditActivityModal } from "./EditActivityModal";
 import { LogActivityModal } from "./LogActivityModal";
 import { RetractActivityModal } from "./RetractActivityModal";
@@ -258,6 +259,14 @@ export default async function DealDetailPage({
                         ))}
                       </ul>
                     </details>
+                  ) : null}
+
+                  {entry.attachments.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-3">
+                      {entry.attachments.map((doc) => (
+                        <AttachmentLink key={doc.id} documentId={doc.id} fileName={doc.fileName} />
+                      ))}
+                    </div>
                   ) : null}
 
                   {!entry.retractedAt ? (

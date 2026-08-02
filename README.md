@@ -904,6 +904,123 @@ fields read under the existing `deals_select` scope), integration (58 total, 6 n
 hosted project, run twice consecutively), and the full Playwright e2e suite (11, unchanged) all
 green.
 
+**M3.8** adds attachments on activities, inheriting deal visibility - upload from the Log Activity
+modal, view/download from the Engagement timeline.
+
+**Stopped and asked before implementing**, per CLAUDE.md's own instruction: file storage is a brand
+new architectural surface (Supabase Storage, RLS-equivalent access, signed URLs) with zero decisions
+recorded anywhere in `docs/DECISIONS.md` or `docs/03-architecture.md` - no max file size, no allowed
+file types, no virus-scanning stance. Asked the product owner three questions; none were answered
+before "continue," so the recommended defaults were used, explicitly flagged rather than silently
+assumed: **10 MB** max size; **common office + PDF + image** MIME allow-list (pdf, doc/docx,
+xls/xlsx, ppt/pptx, png, jpg); **no virus/malware scanning** - this environment has no scanning
+service configured or credentials for one, a disclosed gap for a future security-hardening
+milestone, not a silent omission (`src/domain/document.ts`, `src/services/documents.ts`).
+
+`db/migrations/0010_documents.up.sql` adds `documents` (`docs/01-domain-model.md`'s own field list)
+with two deliberate, disclosed deviations: `contact_id` is deferred (references `contacts(id)`,
+which doesn't exist until M5.5 - the identical "can't reference a table that isn't there" reasoning
+migration 0008 already gave for `activity_contacts`), and `version_number`/`supersedes_document_id`
+are deferred to **M9.5** ("Documents with versioning and deal linkage"), a materially later
+milestone than this one. `account_id` IS included (nullable, unused by any code path yet) since,
+unlike `contact_id`, `accounts` already exists - mirroring `activities.account_id`'s own "documented
+column, no code path yet" precedent. `practice_line_id` is a genuine, physical column here (unlike
+`activities`, which derives it via `deal_practice_line_id()` and stores no such column) - the one
+real difference between the two tables' own field lists in `docs/01-domain-model.md`, most plausibly
+because a future practice-scoped document (an M9.5 template) may have no deal/account/activity at
+all; captured on insert from `deal_id` by a trigger, the same trigger-is-authoritative pattern
+`stage_id_at_time` already established.
+
+Supabase Storage buckets are plain rows in `storage.buckets` (documented Supabase behaviour), so the
+private "documents" bucket is provisioned by this same migration (`insert into storage.buckets`),
+alongside the schema it supports. **Deliberately no RLS policy on `storage.objects` at all**: every
+read/write goes through the caller's own RLS-scoped read of the `documents` table first (the real
+authorisation boundary), then a service-role client for the actual Storage call
+(`src/lib/storage.ts`) - the same privileged-single-path-write shape `writeAudit`/`writeStageEvent`/
+`retractActivityRow` already use. Duplicating the identical check a second way as `storage.objects`
+RLS would be two sources of truth for one rule, not CLAUDE.md #1's RLS-plus-`can()` pairing (which
+checks the same resource by two *independent* mechanisms).
+
+**A genuine RLS mechanics discovery**, worth recording so it isn't rediscovered the hard way:
+Postgres re-validates an `UPDATE`'s resulting row against a table's *SELECT* policy too, not only
+the `UPDATE` policy's own `USING`/`WITH CHECK` (verified directly, not merely reasoned about). Since
+`documents_select` requires `deleted_at is null`, a caller's own RLS-scoped session can never
+successfully set `deleted_at` through a plain `UPDATE` policy - the very act of soft-deleting makes
+the resulting row fail the policy that gates the update. `document.soft_delete`
+(`docs/02-permission-matrix.md`) is therefore **not built in M3.8 at all** - both because removal
+isn't what this milestone's own backlog line asks for (upload plus view, not deletion) and because a
+real implementation needs a service-role-backed write, `retractActivityRow`-style, not an RLS
+policy. `deleted_at` stays as a column for that future work, the same "documented shape, no code
+path yet" precedent as `account_id` above.
+
+Local Postgres has no `storage` schema at all (that's Supabase-specific), so
+`tests/rls/fixtures/local_auth_shim.sql` gained a minimal `storage.buckets` shim - just the one
+table migration 0010's bucket-provisioning insert touches - the same "just enough of Supabase's own
+schema to exercise our policies locally" reasoning the existing `auth.uid()` shim already
+established. Separately, verified directly against the real hosted project: Supabase blocks a
+direct SQL `DELETE` against storage tables ("Use the Storage API instead" -
+`storage.protect_delete()`), so `0010_documents.down.sql` deliberately does not attempt to delete
+the bucket row - rolling back leaves an empty, harmless, unused bucket in place.
+
+`src/services/documents.ts`'s `attachDocumentToActivity` mirrors `logActivity`'s shape exactly
+(not_found before denied, `can()` checked here even though `documents_insert` enforces the same
+scope independently) - `activity.attach_file`'s "own" is the underlying **deal's** ownership fields,
+the identical definition `activity.create` already uses, not the specific activity's own author.
+Upload to Storage happens *before* the `documents` row insert - the safer of the two orderings this
+architecture allows (no single transaction spans both): a failed insert after a successful upload
+leaves a harmless orphaned Storage object, never a `documents` row promising a file that was never
+written. `getDocumentDownloadUrl`'s entire authorisation check IS `getDocumentForDownload`'s read
+through the caller's own RLS-scoped session ("inheriting deal visibility") - minting the signed URL
+afterwards is a mechanism, not a second decision.
+
+UI: the Log Activity modal's optional-fields section (M3.4) gained a plain multi-file input -
+`docs/06-ui-spec.md`'s own field list already named "attachments" as one of the collapsed-by-default
+optional fields, alongside outcome/disposition/contacts-present. Files are passed to the server
+action as a plain `File[]` argument (Next.js Server Actions serialise `File` directly, the same as
+any other supported argument type) - no `FormData`, keeping the established plain-arguments shape.
+A failed attachment (too large, wrong type) never fails the whole action: the activity always saves
+independently, and any per-file problem comes back as a warning on an otherwise-successful result,
+surfaced inline rather than silently dropped. The Engagement timeline (M3.5/M3.6) gained a per-entry
+attachment list with a download control (`AttachmentLink.tsx`) that calls a server action for a
+fresh, short-lived (5 minute) signed URL before ever opening anything - never a plain link straight
+to Storage.
+
+**One real bug found via manual browser QA, fixed before this shipped**: `AttachmentLink`
+originally called `window.open()` *after* awaiting the server action's result. Real browsers treat
+that async gap as breaking the "this was still directly caused by the user's click" heuristic and
+silently popup-block it - it worked, but produced no visible tab. Fixed with the standard pattern:
+open a blank tab *synchronously*, inside the click handler, then redirect it once the signed URL
+resolves (`tab.opener = null` set from the opener's side to keep the same protection `noopener`
+would give, since passing `noopener` to `window.open()` would return `null` and forfeit the very
+reference this fix needs). Verified the fix three independent ways rather than relying on a
+Playwright popup assertion in this sandbox, which turned out to have no route to *any* external
+host at all (even the Supabase project's own root URL times out from the headless browser here,
+confirmed directly) - a sandbox network limitation, not an app defect: (1) the real integration
+test fetches the actual signed URL directly and gets back exact file content; (2) a raw
+`window.open` + redirect probe, independent of this component, demonstrably attempts real
+navigation; (3) the server action returns `ok` with no client-side errors when clicked in the
+running app.
+
+New `tests/integration/attach-document.spec.ts` (8 tests) exercises the real chain against the real
+hosted project: the owning bde attaches a real file (uploaded to and independently downloaded back
+from Storage byte-for-byte, one audit row written); a practice peer who didn't author the deal is
+denied; a director can attach practice-wide; an executive is denied; a file over the size limit and
+a disallowed MIME type are both rejected before any Storage upload is attempted; and
+`getDocumentDownloadUrl` returns a signed URL that a plain `fetch()` can actually download (content
+verified byte-for-byte), while a bde outside the deal's practice can't even see the document exists
+(`not_found`, the same cross-practice reasoning every other case in this codebase already uses). Run
+twice consecutively to confirm fixture idempotency. New `tests/rls/documents.spec.ts` (18 tests)
+proves migration 0010's RLS shape directly against local Postgres. `tests/permissions/matrix.spec.ts`
+gained three named cases for `activity.attach_file` (own/practice/tenant/denied, every role) and
+`tests/unit/document.spec.ts` (6 tests) covers `validateDocumentUpload`'s boundary behaviour.
+
+Verified: typecheck, lint, unit (206, 9 new), RLS (178, 18 new), integration (66 total, 8 new,
+against the real hosted project, run twice consecutively), and the full Playwright e2e suite (11,
+unchanged) all green. Manual browser QA (logging an activity with a real multi-megabyte-capable PDF
+attachment, confirming it renders in the timeline with a working download control after the
+`window.open` fix) confirmed correct behaviour with no console errors beyond the pre-existing,
+unrelated missing-favicon 404 already noted in M3.6's own entry.
+
 ## Commands
 
 ```

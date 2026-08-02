@@ -98,6 +98,30 @@ describe("named deny/allow cases (docs/02-permission-matrix.md, docs/05-test-str
     expect(can(bde, "activity.create", othersDeal)).toBe(false);
   });
 
+  // M3.8 (docs/07-build-backlog.md): "Attachments on activities, inheriting deal visibility."
+  // activity.attach_file shares activity.create's exact own/practice/tenant scope tokens
+  // (docs/02-permission-matrix.md) - checking the underlying DEAL's ownership, not the specific
+  // activity's own author, the same "own" definition used throughout the Activities table.
+  it("bde can attach a file to an activity on a deal they own", () => {
+    const bde = actorWith("bde");
+    const ownedDeal = { tenantId: TENANT, practiceLineId: PRACTICE, ownerId: bde.id };
+    expect(can(bde, "activity.attach_file", ownedDeal)).toBe(true);
+  });
+
+  it("bde cannot attach a file to an activity on a deal they neither own, co-own nor authored", () => {
+    const bde = actorWith("bde");
+    const othersDeal = { tenantId: TENANT, practiceLineId: PRACTICE, ownerId: "someone-else" };
+    expect(can(bde, "activity.attach_file", othersDeal)).toBe(false);
+  });
+
+  it("team_lead and director can attach a file practice-wide; tenant_admin tenant-wide; executive never", () => {
+    const resource = { tenantId: TENANT, practiceLineId: PRACTICE, ownerId: "someone-else" };
+    expect(can(actorWith("team_lead"), "activity.attach_file", resource)).toBe(true);
+    expect(can(actorWith("director"), "activity.attach_file", resource)).toBe(true);
+    expect(can(actorWith("tenant_admin"), "activity.attach_file", resource)).toBe(true);
+    expect(can(actorWith("executive"), "activity.attach_file", resource)).toBe(false);
+  });
+
   it("bde can assign a task to a practice-line peer", () => {
     const bde = actorWith("bde");
     const peerAssignment = { tenantId: TENANT, practiceLineId: PRACTICE };

@@ -23,10 +23,11 @@ const DEFAULT_TYPE: ActivityType = "call";
 // input, so it never hijacks normal typing elsewhere on the page.
 //
 // Deliberately missing, per docs/06-ui-spec.md's own field list, but not buildable yet: the
-// "contacts present"/"attachments" optional fields (contacts don't exist until M5.5; attachments
-// are M3.8) and the secondary "Save and add task" button (Add Task modal is M4). Building either
-// now would show a control with nothing real behind it - the same reasoning every other narrower-
-// than-spec vertical slice this session has taken.
+// "contacts present" optional field (contacts don't exist until M5.5) and the secondary "Save and
+// add task" button (Add Task modal is M4). Building either now would show a control with nothing
+// real behind it - the same reasoning every other narrower-than-spec vertical slice this session
+// has taken. "Attachments" (M3.8) is built - a plain multi-file input alongside outcome/disposition
+// in the same collapsed-by-default section.
 export function LogActivityModal({ dealId, timezone }: { dealId: string; timezone: string }) {
   const router = useRouter();
   // Renders twice on the same page when the timeline is empty (header button + empty-state
@@ -42,6 +43,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
   const [summary, setSummary] = useState("");
   const [outcome, setOutcome] = useState("");
   const [outcomeDisposition, setOutcomeDisposition] = useState<OutcomeDisposition | "">("");
+  const [files, setFiles] = useState<File[]>([]);
   const [showOptional, setShowOptional] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +58,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
     setSummary("");
     setOutcome("");
     setOutcomeDisposition("");
+    setFiles([]);
     setShowOptional(false);
     setError(null);
     dialogRef.current?.showModal();
@@ -90,21 +93,32 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
     setPending(true);
     setError(null);
 
-    const result = await logActivityAction(dealId, {
-      type,
-      activityDate,
-      summary,
-      outcome,
-      outcomeDisposition,
-    });
+    const result = await logActivityAction(
+      dealId,
+      {
+        type,
+        activityDate,
+        summary,
+        outcome,
+        outcomeDisposition,
+      },
+      files,
+    );
 
     setPending(false);
     if (!result.ok) {
       setError(result.message);
       return;
     }
-    dialogRef.current?.close();
     router.refresh();
+    if (result.attachmentWarning) {
+      // The activity itself already saved successfully - keep the modal open just long enough to
+      // show which attachment(s) didn't make it, rather than closing over a silent partial
+      // failure the user would only discover later on the timeline.
+      setError(result.attachmentWarning);
+      return;
+    }
+    dialogRef.current?.close();
   }
 
   function handleKeyDown(e: React.KeyboardEvent) {
@@ -226,6 +240,19 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
                   ))}
                 </select>
               </div>
+              <div className="flex flex-col gap-1.5">
+                <label htmlFor={`${idPrefix}-attachments`} className="text-sm font-medium text-ink">
+                  Attachments (optional)
+                </label>
+                <input
+                  id={`${idPrefix}-attachments`}
+                  type="file"
+                  multiple
+                  onChange={(e) => setFiles(e.target.files ? Array.from(e.target.files) : [])}
+                  className="text-sm text-ink file:mr-3 file:rounded-token file:border file:border-line file:bg-raised file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-ink"
+                />
+                <p className="text-xs text-muted">PDF, Word, Excel, PowerPoint, PNG or JPG — up to 10 MB each.</p>
+              </div>
             </>
           ) : (
             <button
@@ -233,7 +260,7 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
               onClick={() => setShowOptional(true)}
               className="self-start text-xs font-medium text-accent underline-offset-2 hover:underline"
             >
-              Add outcome and disposition
+              Add outcome, disposition and attachments
             </button>
           )}
 

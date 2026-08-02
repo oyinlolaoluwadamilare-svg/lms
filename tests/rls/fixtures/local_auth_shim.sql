@@ -14,3 +14,17 @@ create or replace function auth.uid() returns uuid
 language sql stable as $$
   select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid
 $$;
+
+-- M3.8: migration 0010 provisions the real "documents" Storage bucket via `insert into
+-- storage.buckets` (Supabase Storage buckets are plain rows in storage.buckets - documented
+-- Supabase behaviour). A plain local Postgres has no `storage` schema at all, so this shim
+-- provides just enough of it (the one table that one insert touches) for the migration to apply
+-- locally - RLS tests never read/write actual file bytes against local Postgres; only the real
+-- hosted project's Storage API is ever used for that (src/services/documents.ts).
+create schema if not exists storage;
+
+create table if not exists storage.buckets (
+  id text primary key,
+  name text not null,
+  public boolean not null default false
+);

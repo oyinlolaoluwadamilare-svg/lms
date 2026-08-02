@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { listActivitiesForDeal } from "@/data/activities";
 import { listActivityRevisionsForActivities, type ActivityRevisionItem } from "@/data/activityRevisions";
+import { listDocumentsForActivities, type DocumentListItem } from "@/data/documents";
 import { listStageEventsForDeal } from "@/data/stageEvents";
 import type { ActivityType, OutcomeDisposition } from "@/domain/activity";
 
@@ -20,6 +21,7 @@ export interface ActivityTimelineEntry {
   retractedByName: string | null;
   retractionReason: string | null;
   revisions: ActivityRevisionItem[];
+  attachments: DocumentListItem[];
   sortInstant: string;
 }
 
@@ -57,10 +59,10 @@ export interface EngagementTimeline {
 // M3.5 (docs/07-build-backlog.md): "Engagement timeline component merging activities and stage
 // events, newest first." M3.6 added the per-activity edit/retraction fields (editLockedAt,
 // retractedAt, retractedByName, retractionReason, revisions) so the rendering layer can show an
-// "edited" marker and struck-through retracted entries without a second round trip. Still narrower
-// than docs/06-ui-spec.md's full description in one way, because its dependency doesn't exist yet:
-// no "attributed contacts" (M5.5). "Type icon" is rendered as a text label, not a graphic - no icon
-// system exists in this codebase yet.
+// "edited" marker and struck-through retracted entries without a second round trip. M3.8 added
+// `attachments` the same way. Still narrower than docs/06-ui-spec.md's full description in one way,
+// because its dependency doesn't exist yet: no "attributed contacts" (M5.5). "Type icon" is
+// rendered as a text label, not a graphic - no icon system exists in this codebase yet.
 //
 // Sorting an activity (activity_date, a DATE) against a stage change (occurred_at, a TIMESTAMPTZ)
 // needs a common instant: activity_date becomes noon UTC on that date purely as a SORT key, never
@@ -80,10 +82,16 @@ export async function getEngagementTimeline(supabase: SupabaseClient, dealId: st
     listStageEventsForDeal(supabase, dealId),
   ]);
 
-  const revisionsByActivity = await listActivityRevisionsForActivities(
-    supabase,
-    activities.map((a) => a.id),
-  );
+  const [revisionsByActivity, attachmentsByActivity] = await Promise.all([
+    listActivityRevisionsForActivities(
+      supabase,
+      activities.map((a) => a.id),
+    ),
+    listDocumentsForActivities(
+      supabase,
+      activities.map((a) => a.id),
+    ),
+  ]);
 
   const activityEntries: ActivityTimelineEntry[] = activities.map((a) => ({
     kind: "activity",
@@ -101,6 +109,7 @@ export async function getEngagementTimeline(supabase: SupabaseClient, dealId: st
     retractedByName: a.retractedByName,
     retractionReason: a.retractionReason,
     revisions: revisionsByActivity.get(a.id) ?? [],
+    attachments: attachmentsByActivity.get(a.id) ?? [],
     sortInstant: `${a.activityDate}T12:00:00.000Z`,
   }));
 
