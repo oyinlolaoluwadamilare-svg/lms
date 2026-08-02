@@ -7,7 +7,7 @@ import {
   DealReferenceConflictError,
   getDealDetail as getDealDetailRow,
   getDealForEdit,
-  getDealForStageChange,
+  getDealForAuthorization,
   insertDeal,
   listDeals,
   nextDealReference,
@@ -212,7 +212,7 @@ export async function changeStage(
   dealId: string,
   toStageId: string,
 ): Promise<ChangeStageResult> {
-  const deal = await getDealForStageChange(supabase, dealId);
+  const deal = await getDealForAuthorization(supabase, dealId);
   if (!deal) return { ok: false, code: "not_found" };
 
   const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);

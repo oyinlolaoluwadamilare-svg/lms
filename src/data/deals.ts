@@ -316,7 +316,7 @@ export async function listDeals(
   });
 }
 
-export interface DealForStageChange {
+export interface DealForAuthorization {
   id: string;
   tenantId: string;
   practiceLineId: string;
@@ -325,12 +325,15 @@ export interface DealForStageChange {
   authorId: string;
 }
 
-// For changeStage's authorisation check (src/services/deals.ts) - just enough of the deal to build
-// the can() Resource (practiceLineId/ownerId/authorId) and to compare the current stage against the
-// requested one. Deliberately not reusing getDealWithStage: that function's shape is about money
-// calculation, not authorisation, and mixing the two would make it unclear which fields a future
-// caller can rely on.
-export async function getDealForStageChange(supabase: SupabaseClient, dealId: string): Promise<DealForStageChange | null> {
+// For any service's can() authorisation check against a deal - just enough of the deal to build
+// the can() Resource (practiceLineId/ownerId/authorId), plus the current stage for the one caller
+// (changeStage) that needs to compare it against a requested target. Originally named
+// getDealForStageChange when changeStage (M1.5) was its only caller; generalised when logActivity
+// (M3.2) turned out to need the exact same shape for its own can() check - a second caller with
+// identical requirements is a real pattern, not a coincidence worth duplicating. Deliberately not
+// reusing getDealWithStage: that function's shape is about money calculation, not authorisation,
+// and mixing the two would make it unclear which fields a future caller can rely on.
+export async function getDealForAuthorization(supabase: SupabaseClient, dealId: string): Promise<DealForAuthorization | null> {
   const { data, error } = await supabase
     .from("deals")
     .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id")
@@ -338,7 +341,7 @@ export async function getDealForStageChange(supabase: SupabaseClient, dealId: st
     .is("deleted_at", null)
     .maybeSingle();
 
-  if (error) throw new Error(`getDealForStageChange failed: ${error.message}`);
+  if (error) throw new Error(`getDealForAuthorization failed: ${error.message}`);
   if (!data) return null;
 
   const row = data as { id: string; tenant_id: string; practice_line_id: string; stage_id: string; owner_id: string | null; author_id: string };

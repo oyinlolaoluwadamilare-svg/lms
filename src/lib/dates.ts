@@ -11,9 +11,12 @@ export function resolveTimezone(tenantTimezone: string, userTimezone: string | n
 }
 
 // The calendar date (YYYY-MM-DD) `isoInstant` falls on in the given IANA timezone - the building
-// block for every "whole days" calculation in this app. en-CA is just the shortest built-in
-// Intl locale that formats as YYYY-MM-DD; nothing Canada-specific about it.
-function calendarDateInTimezone(isoInstant: string, timezone: string): string {
+// block for every "whole days" calculation in this app, and also directly usable wherever a
+// caller needs "what calendar date is it right now, for this user" as a plain YYYY-MM-DD string -
+// e.g. validating a DATE column (itself YYYY-MM-DD, lexicographically sortable) against "today".
+// en-CA is just the shortest built-in Intl locale that formats this way; nothing Canada-specific
+// about it.
+export function dateInTimezone(isoInstant: string, timezone: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
     new Date(isoInstant),
   );
@@ -27,8 +30,8 @@ function calendarDateInTimezone(isoInstant: string, timezone: string): string {
 // `sinceISO` later than `untilISO` (clock skew, or a reconstructed/backdated event) clamps to zero
 // rather than rendering a nonsensical "-1 days".
 export function daysBetweenInTimezone(sinceISO: string, untilISO: string, timezone: string): number {
-  const sinceUtc = Date.parse(`${calendarDateInTimezone(sinceISO, timezone)}T00:00:00Z`);
-  const untilUtc = Date.parse(`${calendarDateInTimezone(untilISO, timezone)}T00:00:00Z`);
+  const sinceUtc = Date.parse(`${dateInTimezone(sinceISO, timezone)}T00:00:00Z`);
+  const untilUtc = Date.parse(`${dateInTimezone(untilISO, timezone)}T00:00:00Z`);
   return Math.max(0, Math.round((untilUtc - sinceUtc) / DAY_MS));
 }
 

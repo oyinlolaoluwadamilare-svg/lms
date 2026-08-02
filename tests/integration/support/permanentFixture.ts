@@ -62,6 +62,27 @@ export async function findOrCreateUser(
   return authId;
 }
 
+// Generic find-or-create for any table with a natural unique key (a code, a name, a reference) -
+// promoted here once a second integration spec (tests/integration/log-activity.spec.ts) needed the
+// exact same logic tests/integration/pipeline-list.spec.ts's M2.1 fixture fix first introduced, for
+// the same reason: once a row is referenced by an immutable child table (audit_entries,
+// stage_events, and now activities), it can never be deleted again, so a real integration fixture
+// against the hosted project must reuse rows across runs rather than delete-and-recreate them.
+export async function findOrCreateByUniqueMatch(
+  service: SupabaseClient,
+  table: string,
+  match: Record<string, string>,
+  insertRow: Record<string, unknown>,
+): Promise<string> {
+  const { data: existing, error: findError } = await service.from(table).select("id").match(match).maybeSingle();
+  if (findError) throw new Error(`look up ${table} (${JSON.stringify(match)}) failed: ${findError.message}`);
+  if (existing) return existing.id;
+
+  const { data, error } = await service.from(table).insert(insertRow).select("id").single();
+  if (error) throw new Error(`seed ${table} (${JSON.stringify(match)}) failed: ${error.message}`);
+  return data.id;
+}
+
 export async function signIn(url: string, anonKey: string, email: string, password: string): Promise<SupabaseClient> {
   const client = createClient(url, anonKey, { auth: { persistSession: false, autoRefreshToken: false } });
   const { error } = await client.auth.signInWithPassword({ email, password });

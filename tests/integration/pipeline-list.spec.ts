@@ -5,7 +5,7 @@ import { daysBetweenInTimezone } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import { changeStage, getDealDetail, listPipelineDeals, updateDeal } from "@/services/deals";
 import { getStageHistory } from "@/services/stageEvents";
-import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
+import { findOrCreateByUniqueMatch, findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M1.4/M1.5 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced
 // filter set" and "Pipeline board view with drag, routed through the single changeStage service
@@ -72,63 +72,57 @@ function signIn(email: string): Promise<SupabaseClient> {
   return signInAs(SUPABASE_URL, ANON_KEY, email, PASSWORD);
 }
 
-async function findOrCreateByUniqueMatch(
-  table: string,
-  match: Record<string, string>,
-  insertRow: Record<string, unknown>,
-): Promise<string> {
-  const { data: existing, error: findError } = await service.from(table).select("id").match(match).maybeSingle();
-  if (findError) throw new Error(`look up ${table} (${JSON.stringify(match)}) failed: ${findError.message}`);
-  if (existing) return existing.id;
-
-  const { data, error } = await service.from(table).insert(insertRow).select("id").single();
-  if (error) throw new Error(`seed ${table} (${JSON.stringify(match)}) failed: ${error.message}`);
-  return data.id;
-}
-
 beforeAll(async () => {
   service = createServiceClient();
 
   ids.tenantId = await findOrCreateTenant(service, "m1-4-integration-test", "M1.4 Integration Test Tenant");
 
   ids.advisoryPracticeLineId = await findOrCreateByUniqueMatch(
+    service,
     "practice_lines",
     { tenant_id: ids.tenantId, code: "ADV" },
     { tenant_id: ids.tenantId, name: "Advisory", code: "ADV" },
   );
   ids.searchPracticeLineId = await findOrCreateByUniqueMatch(
+    service,
     "practice_lines",
     { tenant_id: ids.tenantId, code: "SRCH" },
     { tenant_id: ids.tenantId, name: "Search", code: "SRCH" },
   );
 
   ids.discoveryStageId = await findOrCreateByUniqueMatch(
+    service,
     "pipeline_stages",
     { tenant_id: ids.tenantId, code: "DISCOVERY" },
     { tenant_id: ids.tenantId, name: "Discovery", code: "DISCOVERY", sort_order: 1, probability_threshold: 20, stage_type: "open" },
   );
   ids.proposalStageId = await findOrCreateByUniqueMatch(
+    service,
     "pipeline_stages",
     { tenant_id: ids.tenantId, code: "PROPOSAL" },
     { tenant_id: ids.tenantId, name: "Proposal", code: "PROPOSAL", sort_order: 2, probability_threshold: 50, stage_type: "open" },
   );
   ids.wonStageId = await findOrCreateByUniqueMatch(
+    service,
     "pipeline_stages",
     { tenant_id: ids.tenantId, code: "WON" },
     { tenant_id: ids.tenantId, name: "Closed Won", code: "WON", sort_order: 3, probability_threshold: 100, stage_type: "won" },
   );
   ids.lostStageId = await findOrCreateByUniqueMatch(
+    service,
     "pipeline_stages",
     { tenant_id: ids.tenantId, code: "LOST" },
     { tenant_id: ids.tenantId, name: "Closed Lost", code: "LOST", sort_order: 4, probability_threshold: 0, stage_type: "lost" },
   );
 
   ids.advisoryAccountId = await findOrCreateByUniqueMatch(
+    service,
     "accounts",
     { tenant_id: ids.tenantId, name: "Advisory Client" },
     { tenant_id: ids.tenantId, name: "Advisory Client", industry: "Financial Services", region: "West Africa" },
   );
   ids.searchAccountId = await findOrCreateByUniqueMatch(
+    service,
     "accounts",
     { tenant_id: ids.tenantId, name: "Search Client" },
     { tenant_id: ids.tenantId, name: "Search Client" },
@@ -154,6 +148,7 @@ beforeAll(async () => {
   ]);
 
   ids.advisoryDealId = await findOrCreateByUniqueMatch(
+    service,
     "deals",
     { tenant_id: ids.tenantId, reference: "D-4001" },
     {
@@ -196,6 +191,7 @@ beforeAll(async () => {
   if (resetError) throw new Error(`reset advisory deal failed: ${resetError.message}`);
 
   ids.searchDealId = await findOrCreateByUniqueMatch(
+    service,
     "deals",
     { tenant_id: ids.tenantId, reference: "D-4002" },
     {
@@ -418,7 +414,7 @@ describe("changeStage", () => {
 
   it("a bde from a different practice line can't even see the deal to move it - not_found, not denied", async () => {
     // A real, worthwhile distinction, not a rounding error: changeStage reads the deal through the
-    // CALLER's own RLS-scoped session (getDealForStageChange), and migration 0005's deals_select
+    // CALLER's own RLS-scoped session (getDealForAuthorization), and migration 0005's deals_select
     // policy already excludes rows outside the caller's practice entitlement entirely. So this
     // request never reaches can() at all - it fails at the read, before authorisation logic runs -
     // and correctly reports not_found rather than denied, the same not-confirming-existence-to-an-

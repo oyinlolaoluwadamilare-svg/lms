@@ -12,7 +12,7 @@ Start here, in order:
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
    **M2 — Engagement history is complete** (staleness colour, M2.3's other half, is deliberately
    deferred to M3.7 — see the `## M2` section below). Current milestone: **M3 — Engagement
-   timeline** ⚑, through task M3.1 — see the `## M3` section below.
+   timeline** ⚑, through task M3.2 — see the `## M3` section below.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -596,6 +596,56 @@ hosted project via the Supabase Management API (`schema_migrations` there now li
 `0008`) - see `db/migrations/README.md`. Typecheck, lint, unit (165, unchanged - no application code
 touched this milestone), RLS (140 tests total, the 28 new above alongside every existing suite), and
 the full Playwright e2e suite (11, unchanged) all green.
+
+**M3.2** adds `logActivity` (`src/services/activities.ts`) - the single path for creating an
+activity, mirroring `changeStage`/`createDeal`'s established shape exactly: `not_found` before
+`denied` (RLS already hid the row from an actor outside their scope, so this never confirms
+existence to them), `can()` checked here even though `activities_insert` (migration 0008) enforces
+the same scope independently.
+
+Migration `0009_activity_engagement_trigger` adds the `last_engaged_at`/`last_engaged_activity_id`/
+`engagement_count` derived-field trigger - deliberately left out of migration 0008 (M3.1), since the
+backlog itself names this as M3.2's deliverable ("deriving `last_engaged_at`, `engagement_count`...
+in one transaction"). A trigger, not application code, is what actually makes "in one transaction"
+true here, the same reasoning migrations 0006/0007 already established: a Supabase-client caller has
+no multi-statement transaction available to it, but a single `INSERT` firing an `AFTER INSERT`
+trigger genuinely is one. `last_engaged_at` uses only client-facing, non-retracted activities;
+`engagement_count` counts every non-retracted activity regardless of type - two adjacent rows in
+`docs/01-domain-model.md`'s derived-values table with different filters, easy to conflate, so both
+are tested independently (including that an older client-facing activity never moves
+`last_engaged_at` backwards, and that retracting the most-recent one correctly recomputes to the
+next-most-recent).
+
+The one genuinely new business-logic piece: migration 0008's `activity_date_not_future` check is
+only a coarse UTC backstop (its own comment says so) - `logActivity` is where the PRECISE,
+timezone-aware future-date rejection actually happens, using the actor's own resolved timezone via
+`src/lib/dates.ts`'s new `dateInTimezone` export (added alongside the existing `daysBetweenInTimezone`/
+`formatDateInTimezone`, all sharing the same underlying calendar-date-in-timezone logic).
+
+One small refactor along the way: `src/data/deals.ts`'s `getDealForStageChange` (built for
+`changeStage`, M1.5) turned out to be exactly the shape `logActivity` also needs for its own `can()`
+check - generalised to `getDealForAuthorization` rather than duplicated under a second name, since a
+second caller needing an identical shape is a real pattern worth naming honestly. Its one caller
+(`changeStage`) was updated accordingly; nothing about its behaviour changed.
+
+Also promoted: `tests/integration/pipeline-list.spec.ts`'s `findOrCreateByUniqueMatch` helper (the
+M2.1 fixture fix) moved into `tests/integration/support/permanentFixture.ts` once a second
+integration spec (`tests/integration/log-activity.spec.ts`) needed the identical logic -
+`logActivity` writes to `activities`, which has its own FK to `deals`, so once an activity exists
+for a deal, that deal joins the permanently-un-deletable list the same way `stage_events` already
+put it there; a fresh delete-and-recreate fixture would have silently broken the same way M2.1's
+did.
+
+Verified: migration 0009 tested forward/backward locally, then applied to the real hosted project
+(`schema_migrations` there now lists `0001` through `0009`). New `tests/rls/activity_engagement_trigger.spec.ts`
+(6 tests) proves the trigger's arithmetic directly against local Postgres. New
+`tests/integration/log-activity.spec.ts` (5 tests) exercises `logActivity` end to end against the
+real hosted project - a client-facing activity advancing `last_engaged_at`/`engagement_count` with
+one audit row, an internal activity that's logged but doesn't advance `last_engaged_at`, RLS-scoped
+`not_found`/`denied` cases, and the timezone-aware future-date rejection - run twice consecutively
+to confirm idempotency. Typecheck, lint, unit (167, 2 new for `dateInTimezone`), RLS (146 total, the
+6 new above), integration (39 total across all four real-project spec files), and the full Playwright
+e2e suite (11, unchanged) all green.
 
 ## Commands
 

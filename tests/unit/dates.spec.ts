@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysBetweenInTimezone, formatDateInTimezone, formatDurationSeconds, resolveTimezone } from "@/lib/dates";
+import { dateInTimezone, daysBetweenInTimezone, formatDateInTimezone, formatDurationSeconds, resolveTimezone } from "@/lib/dates";
 
 describe("resolveTimezone", () => {
   it("uses the user's own override when set", () => {
@@ -8,6 +8,20 @@ describe("resolveTimezone", () => {
 
   it("falls back to the tenant's default when the user has no override", () => {
     expect(resolveTimezone("Africa/Lagos", null)).toBe("Africa/Lagos");
+  });
+});
+
+describe("dateInTimezone", () => {
+  it("renders YYYY-MM-DD, the same lexicographically-sortable shape a DATE column stores", () => {
+    expect(dateInTimezone("2026-03-09T12:00:00Z", "UTC")).toBe("2026-03-09");
+  });
+
+  // M3.2's future-date check compares this against activity_date (also YYYY-MM-DD) with a plain
+  // string >, so the WAT-crosses-midnight-before-UTC-does case matters here too, the same as
+  // formatDateInTimezone's own test below - just proving the ISO-shaped variant independently.
+  it("renders the LOCAL calendar date, matching formatDateInTimezone's own timezone resolution", () => {
+    expect(dateInTimezone("2026-03-09T23:45:00Z", "UTC")).toBe("2026-03-09");
+    expect(dateInTimezone("2026-03-09T23:45:00Z", "Africa/Lagos")).toBe("2026-03-10");
   });
 });
 
