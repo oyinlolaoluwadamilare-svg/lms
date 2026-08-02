@@ -164,6 +164,54 @@ describe("named deny/allow cases (docs/02-permission-matrix.md, docs/05-test-str
     }
   });
 
+  // M3.6 (docs/07-build-backlog.md): "Edit within the 24-hour window ... retraction by Director or
+  // Admin with a mandatory reason." activity.update is "own" uniformly across every role
+  // (docs/02-permission-matrix.md), including tenant_admin - unlike activity.create's deal-
+  // ownership shape, this checks AUTHORSHIP of the activity itself.
+  it("every role can update an activity they authored", () => {
+    for (const role of ["bde", "team_lead", "director", "tenant_admin"] as const) {
+      const actor = actorWith(role);
+      const ownActivity = { tenantId: TENANT, authorId: actor.id };
+      expect(can(actor, "activity.update", ownActivity), `${role} should be able to update their own activity`).toBe(
+        true,
+      );
+    }
+  });
+
+  it("no role, not even tenant_admin, can update another author's activity", () => {
+    for (const role of ROLES) {
+      const othersActivity = { tenantId: TENANT, authorId: "someone-else" };
+      expect(
+        can(actorWith(role), "activity.update", othersActivity),
+        `${role} should not be able to update another author's activity`,
+      ).toBe(false);
+    }
+  });
+
+  it("director and tenant_admin can retract any practice member's activity", () => {
+    const director = actorWith("director");
+    const tenantAdmin = actorWith("tenant_admin");
+    const resource = { tenantId: TENANT, practiceLineId: PRACTICE, authorId: "someone-else" };
+    expect(can(director, "activity.retract", resource)).toBe(true);
+    expect(can(tenantAdmin, "activity.retract", resource)).toBe(true);
+  });
+
+  it("bde, team_lead and executive can never retract an activity, even their own", () => {
+    for (const role of ["bde", "team_lead", "executive"] as const) {
+      const actor = actorWith(role);
+      const ownActivity = { tenantId: TENANT, practiceLineId: PRACTICE, authorId: actor.id };
+      expect(can(actor, "activity.retract", ownActivity), `${role} should not be able to retract an activity`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("a director cannot retract an activity outside their entitled practice line", () => {
+    const director = actorWith("director");
+    const outsidePractice = { tenantId: TENANT, practiceLineId: OTHER_PRACTICE, authorId: "someone-else" };
+    expect(can(director, "activity.retract", outsidePractice)).toBe(false);
+  });
+
   it("executive is granted select-only, never write, for every action sharing a read/write pair", () => {
     // deal.view (read) vs deal.update (write) on the identical resource - proves the read grant
     // does not accidentally imply a write grant.

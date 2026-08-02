@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ACTIVITY_TYPES,
@@ -29,6 +29,11 @@ const DEFAULT_TYPE: ActivityType = "call";
 // than-spec vertical slice this session has taken.
 export function LogActivityModal({ dealId, timezone }: { dealId: string; timezone: string }) {
   const router = useRouter();
+  // Renders twice on the same page when the timeline is empty (header button + empty-state
+  // button, app/(app)/deals/[id]/page.tsx) - a static id would collide across both instances
+  // (invalid HTML, unreliable label association), the same bug EditActivityModal/
+  // RetractActivityModal's own useId fix addresses (M3.6 QA).
+  const idPrefix = useId();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const summaryRef = useRef<HTMLTextAreaElement>(null);
 
@@ -156,11 +161,11 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
           </fieldset>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="activityDate" className="text-sm font-medium text-ink">
+            <label htmlFor={`${idPrefix}-activityDate`} className="text-sm font-medium text-ink">
               Activity date
             </label>
             <input
-              id="activityDate"
+              id={`${idPrefix}-activityDate`}
               type="date"
               value={activityDate}
               max={today()}
@@ -175,11 +180,11 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label htmlFor="summary" className="text-sm font-medium text-ink">
+            <label htmlFor={`${idPrefix}-summary`} className="text-sm font-medium text-ink">
               Summary
             </label>
             <textarea
-              id="summary"
+              id={`${idPrefix}-summary`}
               ref={summaryRef}
               required
               rows={3}
@@ -192,11 +197,11 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
           {showOptional ? (
             <>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="outcome" className="text-sm font-medium text-ink">
+                <label htmlFor={`${idPrefix}-outcome`} className="text-sm font-medium text-ink">
                   Outcome (optional)
                 </label>
                 <input
-                  id="outcome"
+                  id={`${idPrefix}-outcome`}
                   type="text"
                   value={outcome}
                   onChange={(e) => setOutcome(e.target.value)}
@@ -204,11 +209,11 @@ export function LogActivityModal({ dealId, timezone }: { dealId: string; timezon
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <label htmlFor="outcomeDisposition" className="text-sm font-medium text-ink">
+                <label htmlFor={`${idPrefix}-outcomeDisposition`} className="text-sm font-medium text-ink">
                   Disposition (optional)
                 </label>
                 <select
-                  id="outcomeDisposition"
+                  id={`${idPrefix}-outcomeDisposition`}
                   value={outcomeDisposition}
                   onChange={(e) => setOutcomeDisposition(e.target.value as OutcomeDisposition | "")}
                   className="rounded-token border border-line bg-surface px-3 py-2 text-ink outline-none focus:ring-2 focus:ring-accent"

@@ -768,6 +768,84 @@ Verified: typecheck, lint, unit (169, 2 new for `formatPlainDate`), RLS (160, un
 surface), integration (41 total, 2 new, against the real hosted project, run twice consecutively),
 and the full Playwright e2e suite (11, unchanged) all green.
 
+**M3.6** closes the two gaps M3.5 named as its own: edit within the 24-hour window with revision
+history and an "edited" marker, plus retraction by Director or Admin with a mandatory reason,
+rendered struck through. **No new migration or RLS policy is needed** - migration 0008 (M3.1)
+already shipped `activities_update` (author-only, within `edit_locked_at`), the
+`retraction_needs_reason` check constraint, and `activity_revisions` with no `insert` policy for
+`authenticated` at all, precisely so this milestone could be pure service/UI work on top of an
+already-correct data layer.
+
+`src/services/activities.ts` adds two functions alongside `logActivity`/`canLogActivity`:
+
+- `updateActivity` - reuses `activities_update` via the **caller's own** RLS-scoped session (the
+  same "RLS is a second, independent control" reasoning every other write in this codebase follows).
+  Diffs the five editable fields, writes one `activity_revisions` row per **changed** field (not one
+  combined blob - that per-field ledger is the whole reason the table exists, distinct from and
+  written alongside the audit trail CLAUDE.md #6 requires regardless), and returns a specific result
+  code (`not_found` / `denied` / `retracted` / `edit_window_expired`) rather than treating a
+  zero-row RLS-filtered `UPDATE` as a silent no-op - a caller needs to know *why* nothing happened,
+  the same reasoning `logActivity`'s `activity_date_in_future` is a distinct code rather than a
+  generic denial.
+- `retractActivity` - `docs/02-permission-matrix.md`'s `activity.retract` is scoped by the
+  underlying **deal's** practice/tenant, not authorship (a director corrects any practice member's
+  entry, unlike the author-only edit window), so this is the service-role-backed write migration
+  0008's own comment flagged as this milestone's job to close, authorised solely by an explicit
+  `can()` check before the privileged write happens - the same shape `changeStage`/`writeAudit`
+  already use for privileged single-path writes, not an extension of `activities_update`'s policy.
+
+`src/data/activityRevisions.ts` is new: `insertActivityRevisions` (service-role, one row per
+changed field) and `listActivityRevisionsForActivities` (batched across every activity in a deal's
+timeline in one call, the same batch-not-per-row reasoning `getLatestStageEventOccurredAtByDeal`
+already established). `src/services/engagementTimeline.ts`'s `ActivityTimelineEntry` now carries
+`editLockedAt`/`retractedAt`/`retractedByName`/`retractionReason`/`revisions` so the timeline can
+decide, per entry, whether to show Edit/Retract/the edited marker without a second round trip -
+closing the exact two omissions M3.5's own section named.
+
+UI: `EditActivityModal.tsx` and `RetractActivityModal.tsx` mirror `LogActivityModal.tsx`'s shape
+(native `<dialog>`, plain-arguments server action) - the deal detail page renders Edit only for an
+entry the current actor authored, that isn't retracted, and whose window hasn't closed; Retract only
+when `canRetractActivity` (a new deal-level, not per-entry, helper - retraction eligibility depends
+only on role and the deal's practice/tenant, identical for every activity on it, unlike
+authorship-based Edit) is true and the entry isn't already retracted. Retracted entries render
+struck through with the retractor's name and reason; edited entries show an "edited" marker with an
+expandable revision history (field, previous → new value, who, when).
+
+One real bug found via manual browser QA against a fixture with many logged activities, fixed
+before this shipped: `LogActivityModal`/`EditActivityModal`/`RetractActivityModal` each used a
+**static** form-field `id` (`"summary"`, `"edit-summary"`, `"retract-reason"`, etc). With more than
+one instance mounted at once - every `EditActivityModal`/`RetractActivityModal` on the timeline
+renders simultaneously, one per eligible entry, and `LogActivityModal` itself already double-mounts
+when the timeline is empty (header button + empty-state button) - that's a duplicate `id` on the
+page: invalid HTML and unreliable `label`/`htmlFor` association. Fixed by giving each instance its
+own `useId()`-derived prefix; verified after the fix that a fixture with 32 activities renders zero
+duplicate `id`s.
+
+New `tests/integration/edit-retract-activity.spec.ts` (11 tests) exercises the real chain against
+the real hosted project: the author edits within the window (one revision row per changed field,
+one audit row); editing with no actual changes writes neither; a practice peer (even a director) who
+didn't author the entry is denied editing it - update is author-only, never practice-scoped, even
+for the role that *can* retract; the window closing is `edit_window_expired`, not a silent no-op; a
+retracted activity can't be edited even by its own author inside the window; a director retracts a
+practice member's activity (`retracted_at`/`retracted_by`/`retraction_reason` set, one audit row);
+the author themself cannot self-retract; a director outside the deal's practice line can't even see
+the activity to retract it (`not_found`, the same RLS-hides-it-first reasoning every other
+cross-practice case in this codebase already uses); a blank reason is rejected before any write; and
+an already-retracted activity can't be retracted twice. Run three times consecutively against the
+real project to confirm fixture idempotency. `tests/permissions/matrix.spec.ts` also gained five
+named cases for `activity.update`/`activity.retract` (positive and negative, every role) - the
+CLAUDE.md permission-test rule applied to two actions that existed in the matrix since M3.1/M3.3 but
+had no dedicated behavioural test until the feature that actually exercises them shipped.
+
+Verified: typecheck, lint, unit (174, 6 new), RLS (160, unchanged - migration 0008's own RLS suite
+already covered `activities_update`/`activity_revisions` exhaustively at the DB level since M3.1),
+integration (52 total, 11 new, against the real hosted project, run three times consecutively), and
+the full Playwright e2e suite (11, unchanged) all green. Manual browser QA as the author (bde) and
+as a director against a real fixture confirmed: correct pre-filled Edit modal, successful save with
+the "edited" marker and expandable revision history appearing, correct Retract-only-for-director
+visibility, successful retraction rendering struck through with reason and retractor name, and (post
+`useId` fix) zero duplicate DOM ids on a timeline with 32 real entries.
+
 ## Commands
 
 ```

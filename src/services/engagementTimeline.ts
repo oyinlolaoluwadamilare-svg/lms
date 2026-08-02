@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { listActivitiesForDeal } from "@/data/activities";
+import { listActivityRevisionsForActivities, type ActivityRevisionItem } from "@/data/activityRevisions";
 import { listStageEventsForDeal } from "@/data/stageEvents";
 import type { ActivityType, OutcomeDisposition } from "@/domain/activity";
 
@@ -14,6 +15,11 @@ export interface ActivityTimelineEntry {
   outcomeDisposition: OutcomeDisposition | null;
   authorId: string | null;
   authorName: string | null;
+  editLockedAt: string;
+  retractedAt: string | null;
+  retractedByName: string | null;
+  retractionReason: string | null;
+  revisions: ActivityRevisionItem[];
   sortInstant: string;
 }
 
@@ -49,12 +55,12 @@ export interface EngagementTimeline {
 }
 
 // M3.5 (docs/07-build-backlog.md): "Engagement timeline component merging activities and stage
-// events, newest first." Narrower than docs/06-ui-spec.md's full description in three ways, each
-// because its dependency doesn't exist yet, not silently dropped: no "attributed contacts" (M5.5),
-// no "edited" marker or revision history (M3.6 - activity edits exist since M3.1, but nothing
-// surfaces them yet), and retracted entries aren't rendered struck-through (M3.6 - no code path
-// sets retracted_at yet, so this would be speculative UI for a state nothing can produce). "Type
-// icon" is rendered as a text label, not a graphic - no icon system exists in this codebase yet.
+// events, newest first." M3.6 added the per-activity edit/retraction fields (editLockedAt,
+// retractedAt, retractedByName, retractionReason, revisions) so the rendering layer can show an
+// "edited" marker and struck-through retracted entries without a second round trip. Still narrower
+// than docs/06-ui-spec.md's full description in one way, because its dependency doesn't exist yet:
+// no "attributed contacts" (M5.5). "Type icon" is rendered as a text label, not a graphic - no icon
+// system exists in this codebase yet.
 //
 // Sorting an activity (activity_date, a DATE) against a stage change (occurred_at, a TIMESTAMPTZ)
 // needs a common instant: activity_date becomes noon UTC on that date purely as a SORT key, never
@@ -74,6 +80,11 @@ export async function getEngagementTimeline(supabase: SupabaseClient, dealId: st
     listStageEventsForDeal(supabase, dealId),
   ]);
 
+  const revisionsByActivity = await listActivityRevisionsForActivities(
+    supabase,
+    activities.map((a) => a.id),
+  );
+
   const activityEntries: ActivityTimelineEntry[] = activities.map((a) => ({
     kind: "activity",
     id: a.id,
@@ -85,6 +96,11 @@ export async function getEngagementTimeline(supabase: SupabaseClient, dealId: st
     outcomeDisposition: a.outcomeDisposition,
     authorId: a.authorId,
     authorName: a.authorName,
+    editLockedAt: a.editLockedAt,
+    retractedAt: a.retractedAt,
+    retractedByName: a.retractedByName,
+    retractionReason: a.retractionReason,
+    revisions: revisionsByActivity.get(a.id) ?? [],
     sortInstant: `${a.activityDate}T12:00:00.000Z`,
   }));
 

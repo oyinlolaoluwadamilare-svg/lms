@@ -4,13 +4,15 @@ import { ACTIVITY_TYPE_LABELS } from "@/domain/activity";
 import { formatDateInTimezone, formatDurationSeconds, formatPlainDate } from "@/lib/dates";
 import { getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
-import { canLogActivity } from "@/services/activities";
+import { canLogActivity, canRetractActivity } from "@/services/activities";
 import { getEngagementTimeline, type TimelineFilters as TimelineFilterValues } from "@/services/engagementTimeline";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
+import { EditActivityModal } from "./EditActivityModal";
 import { LogActivityModal } from "./LogActivityModal";
+import { RetractActivityModal } from "./RetractActivityModal";
 import { TimelineFilters } from "./TimelineFilters";
 
 const STAGE_TYPE_LABEL: Record<string, string> = { open: "Open", won: "Won", lost: "Lost" };
@@ -43,12 +45,14 @@ export default async function DealDetailPage({
   // engagement timeline reads through the same session (activities_select/stage_events_select) -
   // if the deal itself is invisible to this actor, this comes back empty rather than erroring,
   // which the early return below makes moot anyway.
-  const [deal, editView, timeline, canLog] = await Promise.all([
+  const [deal, editView, timeline, canLog, canRetract] = await Promise.all([
     getDealDetail(supabase, id),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
     getEngagementTimeline(supabase, id, timelineFilters),
     session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
+    session.status === "active" ? canRetractActivity(supabase, session.actor, id) : false,
   ]);
+  const currentActorId = session.status === "active" ? session.actor.id : null;
 
   if (!deal) {
     return <EmptyState title="Deal not found" description="It may not exist, or isn't visible to your role." />;
@@ -150,13 +154,12 @@ export default async function DealDetailPage({
         </section>
       </div>
 
-      {/* M3.5 (docs/07-build-backlog.md): "Engagement timeline component merging activities and
-          stage events, newest first, with type and author filters and a designed empty state."
-          Narrower than docs/06-ui-spec.md's full description in three ways, each because its
-          dependency doesn't exist yet: no "attributed contacts" (M5.5), no "edited" marker or
-          revision history (M3.6), and retracted entries aren't rendered struck-through (M3.6 - no
-          code path sets retracted_at yet, so that would be speculative UI for a state nothing can
-          produce). "Type icon" is a text label - no icon system exists in this codebase yet. */}
+      {/* M3.5/M3.6 (docs/07-build-backlog.md): "Engagement timeline component merging activities
+          and stage events, newest first, with type and author filters and a designed empty state
+          ... edited marker with revision history ... retracted entries appear struck through with
+          the reason, never removed." Still narrower than docs/06-ui-spec.md's full description in
+          one way, because its dependency doesn't exist yet: no "attributed contacts" (M5.5). "Type
+          icon" is a text label - no icon system exists in this codebase yet. */}
       <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-ink">Engagement timeline</h2>
@@ -205,17 +208,59 @@ export default async function DealDetailPage({
                   key={`activity-${entry.id}`}
                   className="flex flex-col gap-1 border-t border-line pt-2 text-sm first:border-t-0 first:pt-0"
                 >
-                  <p className="text-ink">
+                  <p className={`text-ink ${entry.retractedAt ? "line-through" : ""}`}>
                     <span className="mr-2 rounded-token bg-accent px-1.5 py-0.5 text-xs font-medium text-surface">
                       {ACTIVITY_TYPE_LABELS[entry.type]}
                     </span>
                     {entry.summary}
+                    {entry.revisions.length > 0 ? (
+                      <span className="ml-2 rounded-token bg-raised px-1.5 py-0.5 text-xs font-medium text-muted">edited</span>
+                    ) : null}
                   </p>
-                  <p className="text-xs text-muted">
+                  <p className={`text-xs text-muted ${entry.retractedAt ? "line-through" : ""}`}>
                     {entry.authorName ?? "Unknown"} · {formatPlainDate(entry.activityDate)}
                     {entry.outcome ? ` · ${entry.outcome}` : ""}
                     {entry.outcomeDisposition ? ` (${entry.outcomeDisposition.replace("_", " ")})` : ""}
                   </p>
+
+                  {entry.retractedAt ? (
+                    <p className="text-xs text-lost">
+                      Retracted by {entry.retractedByName ?? "Unknown"}
+                      {entry.retractionReason ? `: ${entry.retractionReason}` : ""}
+                    </p>
+                  ) : null}
+
+                  {entry.revisions.length > 0 ? (
+                    <details className="text-xs text-muted">
+                      <summary className="cursor-pointer select-none">Revision history</summary>
+                      <ul className="mt-1 flex flex-col gap-1 pl-3">
+                        {entry.revisions.map((rev) => (
+                          <li key={rev.id}>
+                            {rev.fieldName}: “{rev.previousValue ?? "—"}” → “{rev.newValue ?? "—"}” · {rev.changedByName ?? "Unknown"} ·{" "}
+                            {formatDateInTimezone(rev.changedAt, timezone)}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+
+                  {!entry.retractedAt ? (
+                    <div className="flex items-center gap-3">
+                      {currentActorId === entry.authorId && new Date() < new Date(entry.editLockedAt) ? (
+                        <EditActivityModal
+                          activity={{
+                            id: entry.id,
+                            type: entry.type,
+                            activityDate: entry.activityDate,
+                            summary: entry.summary,
+                            outcome: entry.outcome,
+                            outcomeDisposition: entry.outcomeDisposition,
+                          }}
+                        />
+                      ) : null}
+                      {canRetract ? <RetractActivityModal activityId={entry.id} /> : null}
+                    </div>
+                  ) : null}
                 </li>
               ),
             )}
