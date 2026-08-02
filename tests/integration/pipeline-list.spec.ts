@@ -15,9 +15,19 @@ import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./supp
 //
 // changeStage calls writeAudit on every successful move, same as createDeal (M1.3) - so once the
 // stage-change tests run, this tenant's users become permanently un-deletable (see
-// tests/integration/support/permanentFixture.ts). This fixture is find-or-create/permanent for
-// tenant + users accordingly, and delete-and-recreate for everything underneath that has no
-// audit_entries FK pointing at it.
+// tests/integration/support/permanentFixture.ts). M2.1 made this worse in one specific way: it also
+// writes a stage_events row referencing the deal (a real FK, no cascade), and stage_events is
+// itself immutable (forbid_mutation blocks delete for every role, including service_role) - so the
+// advisory deal itself, and everything upstream it references (account, practice line, stage),
+// becomes permanently un-deletable too, the same way audit_entries already pins the tenant/users.
+// Verified directly, not assumed: a delete-and-recreate attempt here silently no-ops (Postgres
+// rejects the whole multi-row DELETE statement on the one FK-violating row, and supabase-js's
+// delete() resolves with an unchecked {error} rather than throwing) and leaves duplicate rows
+// accumulating in the real project on every subsequent run. This fixture is find-or-create for the
+// tenant, users, practice lines, stages, accounts and both deals accordingly - the advisory deal's
+// mutable fields (stage_id, name, brief, ...) are additionally reset to their original seed values
+// on every run, since several tests below depend on a specific known starting state, not merely on
+// the row existing.
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -47,20 +57,31 @@ const ids = {
 async function cleanup() {
   if (!ids.tenantId) return;
   await service.from("deal_co_owners").delete().eq("deal_id", ids.advisoryDealId);
-  await service.from("deals").delete().eq("tenant_id", ids.tenantId);
   await service.from("account_practice_owners").delete().in("account_id", [ids.advisoryAccountId, ids.searchAccountId]);
-  await service.from("accounts").delete().eq("tenant_id", ids.tenantId);
-  await service.from("pipeline_stages").delete().eq("tenant_id", ids.tenantId);
   await service.from("user_roles").delete().eq("tenant_id", ids.tenantId);
-  await service.from("practice_lines").delete().eq("tenant_id", ids.tenantId);
-  // Deliberately not deleting users, tenants, or the auth users: once changeStage's "successful
-  // move" test writes an audit_entries row, they are permanently un-deletable - see
-  // tests/integration/support/permanentFixture.ts. Attempting it here would just be a silent
-  // no-op every time.
+  // Deliberately not deleting deals, accounts, pipeline_stages, practice_lines, users, tenants, or
+  // the auth users - see this file's header comment for why deals specifically joined
+  // tenants/users on the permanently-un-deletable list once M2.1 shipped. beforeAll is
+  // find-or-create (plus an explicit reset for the advisory deal's mutable fields) for all of
+  // these instead of delete-and-recreate.
 }
 
 function signIn(email: string): Promise<SupabaseClient> {
   return signInAs(SUPABASE_URL, ANON_KEY, email, PASSWORD);
+}
+
+async function findOrCreateByUniqueMatch(
+  table: string,
+  match: Record<string, string>,
+  insertRow: Record<string, unknown>,
+): Promise<string> {
+  const { data: existing, error: findError } = await service.from(table).select("id").match(match).maybeSingle();
+  if (findError) throw new Error(`look up ${table} (${JSON.stringify(match)}) failed: ${findError.message}`);
+  if (existing) return existing.id;
+
+  const { data, error } = await service.from(table).insert(insertRow).select("id").single();
+  if (error) throw new Error(`seed ${table} (${JSON.stringify(match)}) failed: ${error.message}`);
+  return data.id;
 }
 
 beforeAll(async () => {
@@ -68,42 +89,48 @@ beforeAll(async () => {
 
   ids.tenantId = await findOrCreateTenant(service, "m1-4-integration-test", "M1.4 Integration Test Tenant");
 
-  const { data: practiceLines, error: practiceLinesError } = await service
-    .from("practice_lines")
-    .insert([
-      { tenant_id: ids.tenantId, name: "Advisory", code: "ADV" },
-      { tenant_id: ids.tenantId, name: "Search", code: "SRCH" },
-    ])
-    .select("id, code");
-  if (practiceLinesError) throw new Error(`seed practice lines failed: ${practiceLinesError.message}`);
-  ids.advisoryPracticeLineId = practiceLines!.find((p) => p.code === "ADV")!.id;
-  ids.searchPracticeLineId = practiceLines!.find((p) => p.code === "SRCH")!.id;
+  ids.advisoryPracticeLineId = await findOrCreateByUniqueMatch(
+    "practice_lines",
+    { tenant_id: ids.tenantId, code: "ADV" },
+    { tenant_id: ids.tenantId, name: "Advisory", code: "ADV" },
+  );
+  ids.searchPracticeLineId = await findOrCreateByUniqueMatch(
+    "practice_lines",
+    { tenant_id: ids.tenantId, code: "SRCH" },
+    { tenant_id: ids.tenantId, name: "Search", code: "SRCH" },
+  );
 
-  const { data: stages, error: stagesError } = await service
-    .from("pipeline_stages")
-    .insert([
-      { tenant_id: ids.tenantId, name: "Discovery", code: "DISCOVERY", sort_order: 1, probability_threshold: 20, stage_type: "open" },
-      { tenant_id: ids.tenantId, name: "Proposal", code: "PROPOSAL", sort_order: 2, probability_threshold: 50, stage_type: "open" },
-      { tenant_id: ids.tenantId, name: "Closed Won", code: "WON", sort_order: 3, probability_threshold: 100, stage_type: "won" },
-      { tenant_id: ids.tenantId, name: "Closed Lost", code: "LOST", sort_order: 4, probability_threshold: 0, stage_type: "lost" },
-    ])
-    .select("id, code");
-  if (stagesError) throw new Error(`seed stages failed: ${stagesError.message}`);
-  ids.discoveryStageId = stages!.find((s) => s.code === "DISCOVERY")!.id;
-  ids.proposalStageId = stages!.find((s) => s.code === "PROPOSAL")!.id;
-  ids.wonStageId = stages!.find((s) => s.code === "WON")!.id;
-  ids.lostStageId = stages!.find((s) => s.code === "LOST")!.id;
+  ids.discoveryStageId = await findOrCreateByUniqueMatch(
+    "pipeline_stages",
+    { tenant_id: ids.tenantId, code: "DISCOVERY" },
+    { tenant_id: ids.tenantId, name: "Discovery", code: "DISCOVERY", sort_order: 1, probability_threshold: 20, stage_type: "open" },
+  );
+  ids.proposalStageId = await findOrCreateByUniqueMatch(
+    "pipeline_stages",
+    { tenant_id: ids.tenantId, code: "PROPOSAL" },
+    { tenant_id: ids.tenantId, name: "Proposal", code: "PROPOSAL", sort_order: 2, probability_threshold: 50, stage_type: "open" },
+  );
+  ids.wonStageId = await findOrCreateByUniqueMatch(
+    "pipeline_stages",
+    { tenant_id: ids.tenantId, code: "WON" },
+    { tenant_id: ids.tenantId, name: "Closed Won", code: "WON", sort_order: 3, probability_threshold: 100, stage_type: "won" },
+  );
+  ids.lostStageId = await findOrCreateByUniqueMatch(
+    "pipeline_stages",
+    { tenant_id: ids.tenantId, code: "LOST" },
+    { tenant_id: ids.tenantId, name: "Closed Lost", code: "LOST", sort_order: 4, probability_threshold: 0, stage_type: "lost" },
+  );
 
-  const { data: accounts, error: accountsError } = await service
-    .from("accounts")
-    .insert([
-      { tenant_id: ids.tenantId, name: "Advisory Client", industry: "Financial Services", region: "West Africa" },
-      { tenant_id: ids.tenantId, name: "Search Client" },
-    ])
-    .select("id, name");
-  if (accountsError) throw new Error(`seed accounts failed: ${accountsError.message}`);
-  ids.advisoryAccountId = accounts!.find((a) => a.name === "Advisory Client")!.id;
-  ids.searchAccountId = accounts!.find((a) => a.name === "Search Client")!.id;
+  ids.advisoryAccountId = await findOrCreateByUniqueMatch(
+    "accounts",
+    { tenant_id: ids.tenantId, name: "Advisory Client" },
+    { tenant_id: ids.tenantId, name: "Advisory Client", industry: "Financial Services", region: "West Africa" },
+  );
+  ids.searchAccountId = await findOrCreateByUniqueMatch(
+    "accounts",
+    { tenant_id: ids.tenantId, name: "Search Client" },
+    { tenant_id: ids.tenantId, name: "Search Client" },
+  );
 
   ids.bdeAdvisoryAuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory@example.com", "Bde Advisory", PASSWORD);
   ids.bdeAdvisory2AuthId = await findOrCreateUser(service, ids.tenantId, "m1-4-bde-advisory-2@example.com", "Bde Advisory Two", PASSWORD);
@@ -124,9 +151,10 @@ beforeAll(async () => {
     { account_id: ids.searchAccountId, practice_line_id: ids.searchPracticeLineId, owner_id: ids.bdeSearchAuthId },
   ]);
 
-  const { data: advisoryDeal, error: advisoryDealError } = await service
-    .from("deals")
-    .insert({
+  ids.advisoryDealId = await findOrCreateByUniqueMatch(
+    "deals",
+    { tenant_id: ids.tenantId, reference: "D-4001" },
+    {
       tenant_id: ids.tenantId,
       reference: "D-4001",
       name: "Advisory Pipeline Deal",
@@ -140,15 +168,35 @@ beforeAll(async () => {
       expected_close_date: "2027-03-01",
       proposal_value_minor: "100000000", // NGN 1,000,000.00
       currency_code: "NGN",
-    })
-    .select("id")
-    .single();
-  if (advisoryDealError) throw new Error(`seed advisory deal failed: ${advisoryDealError.message}`);
-  ids.advisoryDealId = advisoryDeal.id;
+    },
+  );
 
-  const { data: searchDeal, error: searchDealError } = await service
+  // M2.1: once changeStage's "successful move" test has run once against this deal, it can never
+  // be deleted again (see this file's header comment) - so re-running this suite reuses the same
+  // row rather than creating a fresh one, and must reset every mutable field the tests below assume
+  // a specific starting value for back to the original seed: changeStage's own tests assert the
+  // deal starts in Discovery, and updateDeal's "co-owner no-op edit produces no audit row" test
+  // only holds if name/brief/negotiated_value_minor are back to their pristine values too.
+  const { error: resetError } = await service
     .from("deals")
-    .insert({
+    .update({
+      name: "Advisory Pipeline Deal",
+      stage_id: ids.discoveryStageId,
+      client_type: "new",
+      status: "active",
+      expected_close_date: "2027-03-01",
+      proposal_value_minor: "100000000",
+      negotiated_value_minor: null,
+      currency_code: "NGN",
+      brief: null,
+    })
+    .eq("id", ids.advisoryDealId);
+  if (resetError) throw new Error(`reset advisory deal failed: ${resetError.message}`);
+
+  ids.searchDealId = await findOrCreateByUniqueMatch(
+    "deals",
+    { tenant_id: ids.tenantId, reference: "D-4002" },
+    {
       tenant_id: ids.tenantId,
       reference: "D-4002",
       name: "Search Won Deal",
@@ -163,11 +211,8 @@ beforeAll(async () => {
       expected_close_date: "2026-01-01",
       negotiated_value_minor: "50000000", // NGN 500,000.00
       currency_code: "NGN",
-    })
-    .select("id")
-    .single();
-  if (searchDealError) throw new Error(`seed search deal failed: ${searchDealError.message}`);
-  ids.searchDealId = searchDeal.id;
+    },
+  );
 
   await service.from("deal_co_owners").insert({ deal_id: ids.advisoryDealId, user_id: ids.bdeAdvisory3AuthId });
 });
@@ -364,36 +409,94 @@ describe("changeStage", () => {
     expect(dealRow?.stage_id).toBe(ids.discoveryStageId);
   });
 
-  it("the owning bde moves their deal to another open stage; exactly one audit row is written", async () => {
+  it("the owning bde moves their deal to another open stage; exactly one audit row and one stage_events row are written", async () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
     const session = await getSessionActor(client);
     expect(session.status).toBe("active");
     if (session.status !== "active") return;
 
+    // Counts and "most recent row" lookups throughout this test are deliberately relative
+    // (before/after deltas, not absolute counts) rather than exact-length assertions: this fixture
+    // is find-or-create/reset for the advisory deal (see this file's header comment), so
+    // audit_entries/stage_events history for it - correctly, per CLAUDE.md #4's append-only rule -
+    // accumulates across every real run of this suite against the hosted project, not just once.
+    const before = await service.from("deals").select("updated_at, created_at").eq("id", ids.advisoryDealId).single();
+    const { data: priorStageEvents } = await service
+      .from("stage_events")
+      .select("occurred_at")
+      .eq("deal_id", ids.advisoryDealId)
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+    const { count: auditCountBefore } = await service
+      .from("audit_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("entity_id", ids.advisoryDealId)
+      .eq("action", "deal.change_stage");
+    const { count: stageEventCountBefore } = await service
+      .from("stage_events")
+      .select("id", { count: "exact", head: true })
+      .eq("deal_id", ids.advisoryDealId);
+
     const result = await changeStage(client, session.actor, ids.advisoryDealId, ids.proposalStageId);
     expect(result).toEqual({ ok: true });
 
-    // Not asserting updated_at/updated_by here: migration 0006 (the trigger that maintains them)
-    // is verified locally in tests/rls/deals_foundation.spec.ts, against a real per-user Postgres
-    // session, but this container has no raw-TCP egress to the hosted project's database and no
-    // valid Supabase Management API token in this session to run DDL through instead - so 0006
-    // has not yet been mirrored onto the real project the way migration 0005 was. Flagged as an
-    // outstanding manual step (see README.md's M1.5 entry), not silently assumed done.
-    const { data: dealRow } = await service.from("deals").select("stage_id").eq("id", ids.advisoryDealId).single();
+    // Migrations 0006 (updated_at/updated_by trigger) and 0007 (stage_events) were applied to this
+    // real hosted project via the Supabase Management API's SQL endpoint, the same mechanism
+    // documented in README.md's M1.1 note - closing the gap tests/integration/README.md and
+    // db/migrations/README.md previously disclosed (this container still has no raw-TCP egress to
+    // the database directly; a Personal Access Token was supplied ad hoc to use the Management API
+    // instead). Both are now asserted on for real, not skipped.
+    const { data: dealRow } = await service.from("deals").select("stage_id, updated_at, updated_by").eq("id", ids.advisoryDealId).single();
     expect(dealRow?.stage_id).toBe(ids.proposalStageId);
+    expect(new Date(dealRow!.updated_at).getTime()).toBeGreaterThan(new Date(before.data!.updated_at).getTime());
+    expect(dealRow?.updated_by).toBe(ids.bdeAdvisoryAuthId);
 
-    const { data: auditRows } = await service
+    const { data: auditRows, count: auditCountAfter } = await service
       .from("audit_entries")
-      .select("action, actor_id, before, after")
+      .select("action, actor_id, before, after", { count: "exact" })
       .eq("entity_id", ids.advisoryDealId)
-      .eq("action", "deal.change_stage");
-    expect(auditRows).toHaveLength(1);
+      .eq("action", "deal.change_stage")
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+    expect(auditCountAfter).toBe((auditCountBefore ?? 0) + 1);
     expect(auditRows?.[0]).toMatchObject({
       action: "deal.change_stage",
       actor_id: ids.bdeAdvisoryAuthId,
       before: { stageId: ids.discoveryStageId },
       after: { stageId: ids.proposalStageId },
     });
+
+    // M2.1/M2.2: changeStage's single stage_events write, verified for real against the hosted
+    // project - the from/to stage ids, the actor, and the derived is_regression/
+    // duration_in_previous_seconds columns migration 0007's before-insert trigger computes.
+    // Discovery(sort_order 1) -> Proposal(sort_order 2) is forward, never a regression. Duration is
+    // computed from the true reference point (the deal's most recent prior stage_events row if one
+    // already exists from an earlier run of this suite, or deals.created_at if this is genuinely
+    // the deal's first-ever transition) - not assumed to be "small," since this deal can carry real
+    // history from previous runs.
+    const { data: stageEventRows, count: stageEventCountAfter } = await service
+      .from("stage_events")
+      .select("from_stage_id, to_stage_id, actor_id, is_regression, is_reconstructed, occurred_at, duration_in_previous_seconds::text", {
+        count: "exact",
+      })
+      .eq("deal_id", ids.advisoryDealId)
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+    expect(stageEventCountAfter).toBe((stageEventCountBefore ?? 0) + 1);
+    const newEvent = stageEventRows![0]!;
+    expect(newEvent).toMatchObject({
+      from_stage_id: ids.discoveryStageId,
+      to_stage_id: ids.proposalStageId,
+      actor_id: ids.bdeAdvisoryAuthId,
+      is_regression: false,
+      is_reconstructed: false,
+    });
+    const referenceTime = priorStageEvents?.[0]?.occurred_at ?? before.data!.created_at;
+    const expectedDuration = (new Date(newEvent.occurred_at).getTime() - new Date(referenceTime).getTime()) / 1000;
+    // Tolerance of 5s covers the trigger's own float-to-bigint rounding (extract(epoch ...)::bigint)
+    // against this recomputation's millisecond precision - not network/clock slack, since every
+    // timestamp compared here is a value already committed by Postgres, never a client-side "now."
+    expect(Math.abs(Number(newEvent.duration_in_previous_seconds) - expectedDuration)).toBeLessThan(5);
   });
 });
 
@@ -450,18 +553,27 @@ describe("updateDeal", () => {
     expect(session.status).toBe("active");
     if (session.status !== "active") return;
 
-    // A no-op edit (identical values) so this doesn't disturb the "exactly one audit row, only the
-    // changed fields" assertion the next test makes - proves the co-owner path is allowed without
-    // pre-empting what actually changes.
+    const { count: auditCountBefore } = await service
+      .from("audit_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("entity_id", ids.advisoryDealId)
+      .eq("action", "deal.update");
+
+    // A no-op edit (identical values) so this doesn't disturb the "exactly one NEW audit row, only
+    // the changed fields" assertion the next test makes - proves the co-owner path is allowed
+    // without pre-empting what actually changes.
     const result = await updateDeal(client, session.actor, ids.advisoryDealId, editInput);
     expect(result).toEqual({ ok: true });
 
-    const { data: auditRows } = await service
+    // A delta, not an absolute count: this fixture reuses the same deal id across every real run of
+    // this suite (see this file's header comment), so past runs' deal.update audit history for it
+    // is real, expected accumulation, not a leak to assert away.
+    const { count: auditCountAfter } = await service
       .from("audit_entries")
-      .select("id")
+      .select("id", { count: "exact", head: true })
       .eq("entity_id", ids.advisoryDealId)
       .eq("action", "deal.update");
-    expect(auditRows).toHaveLength(0);
+    expect(auditCountAfter).toBe(auditCountBefore ?? 0);
   });
 
   it("the owning bde edits several fields at once; the audit row's before/after contain only what changed", async () => {
@@ -469,6 +581,12 @@ describe("updateDeal", () => {
     const session = await getSessionActor(client);
     expect(session.status).toBe("active");
     if (session.status !== "active") return;
+
+    const { count: auditCountBefore } = await service
+      .from("audit_entries")
+      .select("id", { count: "exact", head: true })
+      .eq("entity_id", ids.advisoryDealId)
+      .eq("action", "deal.update");
 
     const result = await updateDeal(client, session.actor, ids.advisoryDealId, {
       name: "Advisory Pipeline Deal (Revised)",
@@ -491,12 +609,14 @@ describe("updateDeal", () => {
       brief: "Renegotiated after the discovery call.",
     });
 
-    const { data: auditRows } = await service
+    const { data: auditRows, count: auditCountAfter } = await service
       .from("audit_entries")
-      .select("action, actor_id, before, after")
+      .select("action, actor_id, before, after", { count: "exact" })
       .eq("entity_id", ids.advisoryDealId)
-      .eq("action", "deal.update");
-    expect(auditRows).toHaveLength(1);
+      .eq("action", "deal.update")
+      .order("occurred_at", { ascending: false })
+      .limit(1);
+    expect(auditCountAfter).toBe((auditCountBefore ?? 0) + 1);
     expect(auditRows?.[0]).toMatchObject({
       action: "deal.update",
       actor_id: ids.bdeAdvisoryAuthId,

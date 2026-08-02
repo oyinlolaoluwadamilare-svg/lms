@@ -44,22 +44,28 @@ all, and its own `updated_by`-carrying-table list is incomplete against its own 
 updated_by"). Treat it as a strong starting point per table, not an unquestionable source for every
 detail - CLAUDE.md's stated invariants are the higher authority when the two disagree.
 
-## `0006_updated_at_trigger` and `0007_stage_events` are verified locally, not yet mirrored onto the real hosted project
+## `0006_updated_at_trigger` and `0007_stage_events` are now applied to the real hosted project
 
-Every other migration in this table was applied to both the local test Postgres and the real
-Supabase project it mirrors (see `README.md`'s M1.1 note on how - the Supabase Management API's SQL
-endpoint, using a Personal Access Token supplied ad hoc earlier in that session). This container has
-no raw-TCP egress to connect to the hosted project's Postgres directly, and no Management API token
-in this session to run DDL through instead - so neither migration has been applied to the real
-project yet, only tested (forward and backward) against the local Postgres used by `tests/rls`.
-`tests/integration/pipeline-list.spec.ts`'s `changeStage` tests deliberately don't assert on
-`updated_at`/`updated_by` for this reason (0006) - see that file's comment.
+Both were initially shipped verified only against the local test Postgres - this container has no
+raw-TCP egress to the hosted project's database, so migrations before this point required a
+Personal Access Token supplied ad hoc in chat (the same mechanism `0005` used) to run through the
+Supabase Management API's SQL endpoint instead, and no such token was available in the session that
+wrote `0006`/`0007`. That gap is now closed: a token was supplied in the M2.1/M2.2 session, both
+migrations were applied to the hosted project the same way `0005` was (`schema_migrations` on the
+real project now lists `0001` through `0007`), and `tests/integration/pipeline-list.spec.ts`'s
+`changeStage` tests assert on `updated_at`/`updated_by` and on the `stage_events` row for real
+against it, run three times consecutively to confirm the fixture's idempotency.
 
-`0007` is a harder gap than `0006`'s: `changeStage` now unconditionally writes a `stage_events` row
-on every successful move (M2.2), so - unlike `updated_at`/`updated_by`, which the real-project tests
-simply didn't assert on - the real-project "successful move" integration test actively fails against
-the hosted project until `0007` is applied there: `insertStageEvent failed: Could not find the table
-'public.stage_events' in the schema cache`. Verified directly, not assumed. Flagged as an outstanding
-manual step, not silently worked around: either supply a Management API token so `0006` and `0007`
-can be applied the same way `0005` was, or apply both files' `.up.sql` by hand via the Supabase
-dashboard's SQL editor, in order.
+That same fixture fix is worth recording here: M2.1's `stage_events.deal_id` FK (no cascade) plus
+`stage_events`' own immutability (`forbid_mutation` blocks delete for every role, including
+service_role) means that once `changeStage` writes a `stage_events` row for a deal, that deal - and
+transitively, the account/practice-line/stage rows it references - becomes permanently un-deletable
+too, the same way `audit_entries` already pins the tenant/users (see
+`tests/integration/support/permanentFixture.ts`). The fixture in `pipeline-list.spec.ts` was
+delete-and-recreate for practice lines/stages/accounts/deals before this milestone; verified directly
+that this silently broke on a second real run (Postgres rejects the whole multi-row `DELETE`
+statement on the one FK-violating row, and supabase-js's `.delete()` resolves with an unchecked
+`{error}` rather than throwing) - so it is now find-or-create for all four, with the advisory deal's
+mutable fields reset to their original seed values on every run, and its audit/stage_events
+assertions rewritten as before/after deltas rather than absolute counts (that history correctly
+accumulates across real runs, per CLAUDE.md #4's append-only rule, rather than resetting).

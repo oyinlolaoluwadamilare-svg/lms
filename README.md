@@ -10,8 +10,7 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
-   Current milestone: **M2 — Engagement history**, through task M2.1/M2.2 (in progress — see the
-   `## M2` section below for a disclosed real-project verification gap).
+   Current milestone: **M2 — Engagement history**, through task M2.1/M2.2.
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -381,8 +380,8 @@ introduced no regressions anywhere else.
 ## M2 — Engagement history
 
 **M2.1/M2.2** (`stage_events` table, immutability triggers, the regression-derived column, and
-refactoring `changeStage` to write exactly one event per transition) are implemented and verified
-locally; one real-project gap is disclosed below rather than worked around.
+refactoring `changeStage` to write exactly one event per transition) are complete and verified
+against the real hosted project, not just locally.
 
 Migration `0007_stage_events` follows `db/schema.sql`'s own column list exactly - one deliberate
 deviation, called out rather than silently reproduced: `docs/01-domain-model.md` specifies
@@ -424,22 +423,33 @@ supplied duration is trusted rather than overwritten, both `update` and `delete`
 every writer including the table-owner migrator connection, and the select policy's practice/tenant
 scoping and complete absence of an insert policy are both verified per identity.
 
-**Disclosed gap, verified directly rather than assumed:** migration 0007 (like 0006 before it) has
-not been applied to the real hosted Supabase project - this container still has no raw-TCP Postgres
-egress and no Management API token this session. Unlike 0006 (whose gap was a column nobody
-asserted on), this one is load-bearing: `changeStage` now unconditionally writes a `stage_events` row
-on every successful move, so `tests/integration/pipeline-list.spec.ts`'s "the owning bde moves their
-deal to another open stage" test genuinely fails against the real project right now -
-`insertStageEvent failed: Could not find the table 'public.stage_events' in the schema cache` - not a
-hypothetical, run and confirmed. See `db/migrations/README.md` for the same note. Outstanding manual
-step: apply `db/migrations/0007_stage_events.up.sql` to the hosted project (Management API token or
-the Supabase dashboard's SQL editor), after which that one integration test is expected to pass
-without any code change.
+**Real-project gap closed.** This container still has no raw-TCP Postgres egress, but a Supabase
+Management API Personal Access Token was supplied in this session - the same mechanism `0005` used -
+so both migration `0007` and the still-outstanding `0006` were applied to the real hosted project
+(`schema_migrations` there now lists `0001` through `0007`).
 
-Verified otherwise: typecheck, lint, unit (150 tests), RLS (112 tests across all seven files,
-including the 13 new to this milestone) all green; `test:integration` run against the real project
-shows exactly the one known, disclosed failure above and nothing else - every other test in that
-suite (including every other `changeStage`/`updateDeal` case) still passes unchanged.
+Applying `0007` surfaced a real, verified fixture bug, not a hypothetical: `stage_events.deal_id` is
+a real FK (no cascade), and `stage_events` is itself immutable (`forbid_mutation` blocks delete for
+every role including service_role), so once `changeStage`'s test writes a `stage_events` row for the
+advisory deal, that deal - and transitively the account/practice-line/stage rows it references -
+becomes permanently un-deletable too, the same way `audit_entries` already pins the tenant/users
+(see `tests/integration/support/permanentFixture.ts`). The fixture in `pipeline-list.spec.ts` was
+delete-and-recreate for practice lines/stages/accounts/deals before this milestone; run twice in a
+row for real, that silently left duplicate rows accumulating on the hosted project every run
+(Postgres rejects the whole multi-row `DELETE` on the one FK-violating row, and supabase-js's
+`.delete()` resolves with an unchecked `{error}` instead of throwing). Fixed by making all four
+find-or-create, resetting the advisory deal's mutable fields to their original seed values every
+run, and rewriting its audit/stage_events assertions as before/after deltas rather than absolute
+counts - that history correctly accumulates across real runs (CLAUDE.md #4), it doesn't reset. See
+`db/migrations/README.md` for the same note.
+
+Verified: typecheck, lint, unit (150 tests), RLS (112 tests across all seven files, including the 13
+new to this milestone) all green; `test:integration` run three times consecutively against the real
+hosted project, all 29 tests green every time, including `changeStage`'s `updated_at`/`updated_by`
+and `stage_events` assertions (from/to stage, actor, `is_regression`, and
+`duration_in_previous_seconds` checked against an independently recomputed expected value, not a
+hardcoded one) - and the full Playwright e2e suite (11 tests) green, confirming no regression
+anywhere else.
 
 ## Commands
 
