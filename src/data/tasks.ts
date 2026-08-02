@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { TaskPriority, TaskStatus } from "@/domain/task";
+import { dateInTimezone, subtractDaysFromPlainDate } from "@/lib/dates";
 
 export interface TaskForAuthorization {
   id: string;
@@ -241,4 +242,59 @@ export async function listMyWorkTasks(supabase: SupabaseClient, userId: string, 
     dealName: row.deal?.name ?? null,
     accountName: row.deal?.account?.name ?? null,
   }));
+}
+
+export interface TeamMemberTaskCounts {
+  open: number;
+  overdue: number;
+  completedRecently: number;
+}
+
+interface TeamTaskCountRow {
+  assignee_id: string;
+  status: TaskStatus;
+  due_date: string;
+  completed_at: string | null;
+}
+
+// M4.6's Team view (docs/07-build-backlog.md: "per-person open, overdue and completed counts").
+// Reads through the CALLER's own RLS-scoped session, NOT a service-role client - tasks_select's
+// own practice branch (migration 0011) requires deal_id is not null, so a deal-less personal task
+// assigned to someone OTHER than the caller stays invisible even to a team_lead/director viewing
+// their own team; this is the same privacy boundary RLS already establishes everywhere else, not a
+// new gap this function introduces or should route around. "completed recently" has no doc to
+// point to - a rolling 7-day window, the same judgment call src/domain/task.ts's own taskQueueGroup
+// "this week" bucket already made, so this count doesn't grow unbounded forever; `timezone` is the
+// VIEWER's own (CLAUDE.md #8), since completed_at is a real TIMESTAMPTZ instant that needs
+// resolving through a timezone, unlike due_date's plain-DATE comparisons elsewhere in this file.
+export async function getTeamTaskCounts(
+  supabase: SupabaseClient,
+  memberIds: string[],
+  timezone: string,
+  now: Date = new Date(),
+): Promise<Map<string, TeamMemberTaskCounts>> {
+  const counts = new Map<string, TeamMemberTaskCounts>();
+  for (const id of memberIds) counts.set(id, { open: 0, overdue: 0, completedRecently: 0 });
+  if (memberIds.length === 0) return counts;
+
+  const today = dateInTimezone(now.toISOString(), timezone);
+  const recentCutoff = subtractDaysFromPlainDate(today, 7);
+
+  const { data, error } = await supabase.from("tasks").select("assignee_id, status, due_date, completed_at").in("assignee_id", memberIds).is("deleted_at", null);
+
+  if (error) throw new Error(`getTeamTaskCounts failed: ${error.message}`);
+
+  for (const row of data as unknown as TeamTaskCountRow[]) {
+    const bucket = counts.get(row.assignee_id);
+    if (!bucket) continue;
+
+    if (row.status === "open" || row.status === "in_progress" || row.status === "blocked") {
+      bucket.open += 1;
+      if (row.due_date < today) bucket.overdue += 1;
+    } else if (row.status === "done" && row.completed_at) {
+      if (dateInTimezone(row.completed_at, timezone) >= recentCutoff) bucket.completedRecently += 1;
+    }
+  }
+
+  return counts;
 }

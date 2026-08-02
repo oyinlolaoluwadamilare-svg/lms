@@ -27,6 +27,15 @@ export const NAV_BY_ROLE: Record<Role, readonly NavItem[]> = {
   ],
   director: [
     { label: "Dashboard", href: "/dashboard" },
+    // "Team" (M4.6, docs/07-build-backlog.md: "Team view for Team Lead and Director...") is added
+    // here even though docs/06-ui-spec.md's own "Navigation, per role" table lists Director's nav
+    // as "Dashboard · Pipeline Deals · Accounts · Reviews · Analytics · Files" with no Team entry
+    // at all - a genuine inconsistency between that table and the backlog line explicitly naming
+    // Director. Asked via AskUserQuestion; unanswered, so the recommended default was taken: treat
+    // the table as an incomplete transcription (a gap, not a deliberate exclusion) and extend it
+    // with the same /team entry Team Lead already has, rather than leaving Director's own explicit
+    // backlog requirement unfulfilled.
+    { label: "Team", href: "/team" },
     { label: "Pipeline Deals", href: "/deals" },
     { label: "Accounts", href: "/accounts" },
     { label: "Reviews", href: "/reviews" },

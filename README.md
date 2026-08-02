@@ -1411,6 +1411,59 @@ artifact (not a real bug - confirmed by re-checking with `page.goto` directly).
 Verified: typecheck, lint, unit (218, 8 new), RLS (220, unchanged), integration (103, 10 new), and
 the full Playwright e2e suite (11, unchanged) all green.
 
+**M4.6** (Team view for Team Lead and Director with per-person open, overdue and completed counts)
+is implemented and verified. No new migration - built entirely on `getTeamOverview`
+(`src/services/tasks.ts`) and the two data-layer queries it composes.
+
+**A genuine, direct doc conflict was found and escalated before writing any code**:
+`docs/06-ui-spec.md`'s own "Navigation, per role" table lists Director's nav as "Dashboard ·
+Pipeline Deals · Accounts · Reviews · Analytics · Files" - no My Work, no Team entry at all - while
+this same milestone's own backlog line explicitly names "Team Lead **and Director**", and that same
+doc's own My Work section describes Team as "a third tab" leaders see. Asked via `AskUserQuestion`
+with three options (add a `/team` nav entry for Director; Team Lead only for now, deferring
+Director; or repurpose Director's existing `/reviews` placeholder); the user did not answer, so the
+recommended default was taken - Director's nav gained the same `/team` entry Team Lead already had,
+flagged explicitly in `src/domain/navigation.ts`'s own comment on that array and in a dedicated
+`tests/unit/navigation.spec.ts` assertion documenting the deviation from the table's literal text.
+
+Routing itself reconciles both doc readings rather than picking one over the other: `/team` is a
+real, separate top-level route (matching the nav table's own structure - and one that already
+existed as an M0-era placeholder page, reused here rather than duplicated), but it renders with the
+identical tab-bar styling My Work's own two tabs use (`src/ui/nav/WorkTabs.tsx`, shared by both
+pages) - one visual tab bar spanning two routes, satisfying the "third tab" prose too.
+
+`getTeamOverview` scopes "the team" to every working-role holder (bde/team_lead/director) in the
+SAME practice line(s) the actor themselves holds a team_lead/director grant for -
+`docs/02-permission-matrix.md`'s `task.view` is practice-scoped for both roles, so a tenant-wide
+roster would over-reach either role's actual entitlement. An actor holding no team_lead/director
+grant at all is denied - this view exists for leaders, not individual contributors. Counts are read
+through the CALLER's own RLS-scoped session, not a service-role client: `tasks_select`'s own
+practice branch requires `deal_id is not null`, so a deal-less personal task belonging to someone
+OTHER than the viewer stays invisible even to their own team lead - the same privacy boundary RLS
+already establishes everywhere else in this codebase, not a new gap this feature introduces.
+"Completed" has no documented time window anywhere - a rolling 7-day window, the same judgment call
+`taskQueueGroup`'s own "this week" bucket already made (M4.5), so the count doesn't grow unbounded
+forever.
+
+New `tests/integration/team.spec.ts` (3 tests, against the real hosted project): a team_lead sees
+per-person open/overdue/completed counts for their own practice, correctly excluding a bde from a
+different practice line; a director in the same practice sees the identical roster and counts
+(proving the scope is genuinely practice-based, not role-based); and a plain bde with no
+team_lead/director grant is denied. `tests/unit/navigation.spec.ts` gained the Director-nav
+assertion above and an updated `/team` role-access assertion (now `team_lead` and `director`, not
+`team_lead` alone).
+
+Manual browser QA (real dev server, real hosted project, the same dedicated QA tenant M4.5 used,
+with a team_lead user added to it): the Team page renders all three practice members with correct
+per-person counts reflecting real prior QA activity; the shared tab bar correctly shows all three
+tabs for a team_lead session, verified via direct URL navigation (the same client-navigation timing
+artifact from M4.5's own QA reappeared here and was confirmed non-functional the same way - a fresh
+`page.goto` shows the correct state immediately).
+
+Verified: typecheck, lint, unit (219, 1 net new - the navigation suite gained a Director-specific
+assertion), RLS (220, unchanged), integration (106, 3 new), and the full Playwright e2e suite (11,
+unchanged) all green.
+
 ## Commands
 
 ```

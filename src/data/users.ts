@@ -129,3 +129,21 @@ export async function listAssignableUsersForTenant(supabase: SupabaseClient, ten
   if (error) throw new Error(`listAssignableUsersForTenant failed: ${error.message}`);
   return mapAssignableUserRows(data as unknown as AssignableUserRow[]);
 }
+
+// For M4.6's Team view roster: active, non-deleted users holding a working role (bde/team_lead/
+// director) in the given practice line - deliberately NOT including tenant_admin, unlike
+// listAssignableUsersForPractice's own picker. A tenant-wide admin could theoretically hold a
+// delegated task in this practice, but isn't "on this team" for a practice roster the way a
+// bde/team_lead/director genuinely is.
+export async function listTeamMembersForPractice(supabase: SupabaseClient, tenantId: string, practiceLineId: string): Promise<AssignableUser[]> {
+  const { data, error } = await supabase
+    .from("user_roles")
+    .select("role, users:users!user_id(id, full_name, email, status, deleted_at)")
+    .eq("tenant_id", tenantId)
+    .eq("practice_line_id", practiceLineId)
+    .is("revoked_at", null)
+    .in("role", ["bde", "team_lead", "director"]);
+
+  if (error) throw new Error(`listTeamMembersForPractice failed: ${error.message}`);
+  return mapAssignableUserRows(data as unknown as AssignableUserRow[]);
+}

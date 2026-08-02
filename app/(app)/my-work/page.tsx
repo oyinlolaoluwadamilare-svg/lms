@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { TASK_QUEUE_GROUPS, TASK_QUEUE_GROUP_LABELS, taskQueueGroup } from "@/domain/task";
 import { dateInTimezone } from "@/lib/dates";
 import { listMyWork, type TaskQueueItem } from "@/services/tasks";
@@ -7,20 +6,19 @@ import { getCachedActor } from "../_actor";
 import { checkRouteAccess } from "../_access";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
+import { WorkTabs } from "@/ui/nav/WorkTabs";
 import { TaskRow } from "./TaskRow";
 
 type Tab = "assigned_to_me" | "assigned_by_me";
 
-const TAB_LABELS: Record<Tab, string> = { assigned_to_me: "Assigned to me", assigned_by_me: "Assigned by me" };
-
 // docs/06-ui-spec.md's My Work screen (docs/07-build-backlog.md M4.5): "Grouped as Overdue (red,
 // collapsed only if empty), Due today, This week, Later, and No date... Tabs: Assigned to me and
-// Assigned by me". "Team" (a third tab for leaders) is explicitly M4.6's own backlog line ("Team
-// view for Team Lead and Director with per-person open, overdue and completed counts"), not this
-// one - not built here, the same vertical-slice-per-backlog-line discipline this project has kept
-// throughout. "Collapsed only if empty" is implemented as simply not rendering a group's section at
-// all when it has zero tasks - the simplest reading that satisfies "don't show an empty Overdue
-// section taking up space" without inventing a stateful collapse/expand interaction nobody asked for.
+// Assigned by me". The third "Team" tab is M4.6's own deliverable, built as a separate `/team`
+// route sharing this page's own tab bar (src/ui/nav/WorkTabs.tsx's own comment explains why: a real
+// nav-table entry, not a query-param tab, per that table's own structure). "Collapsed only if
+// empty" is implemented as simply not rendering a group's section at all when it has zero tasks -
+// the simplest reading that satisfies "don't show an empty Overdue section taking up space" without
+// inventing a stateful collapse/expand interaction nobody asked for.
 export default async function MyWorkPage({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { allowed } = await checkRouteAccess("/my-work");
   if (!allowed) return <DeniedState message="My Work is available to BDE and Team Lead roles." />;
@@ -39,23 +37,11 @@ export default async function MyWorkPage({ searchParams }: { searchParams: Promi
   for (const group of TASK_QUEUE_GROUPS) grouped.set(group, []);
   for (const task of tasks) grouped.get(taskQueueGroup(task.dueDate, today))!.push(task);
 
+  const showTeamTab = session.actor.roleGrants.some((g) => g.role === "team_lead" || g.role === "director");
+
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex items-center gap-2">
-        {(["assigned_to_me", "assigned_by_me"] as const).map((t) => (
-          <Link
-            key={t}
-            href={t === "assigned_to_me" ? "/my-work" : "/my-work?tab=assigned_by_me"}
-            prefetch={false}
-            aria-current={tab === t ? "page" : undefined}
-            className={`rounded-token px-3 py-1.5 text-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-              tab === t ? "bg-accent text-surface" : "border border-line text-ink hover:bg-raised"
-            }`}
-          >
-            {TAB_LABELS[t]}
-          </Link>
-        ))}
-      </div>
+      <WorkTabs active={tab} showTeamTab={showTeamTab} />
 
       {tasks.length === 0 ? (
         <EmptyState title="Nothing due" description="No open tasks here right now." />
