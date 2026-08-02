@@ -1614,6 +1614,52 @@ watcher, and both the resolve and unresolve toggle.
 Verified: typecheck, lint, unit (228, 8 new), RLS (236, 6 new), integration (131, 12 new), and the
 full Playwright e2e suite (11, unchanged) all green.
 
+**M4.10** (⚑ "Permission tests: a BDE can assign to a practice peer; an Executive cannot assign at
+all; reassignment history is never overwritten") is implemented and verified. This is the milestone
+that closes out M4 entirely - test-hardening only, no new feature. An audit agent mapped exactly
+what the three named assertions already had coverage for versus what was genuinely missing before
+any test was written, so this didn't duplicate the substantial coverage M4.1-M4.9 already built
+along the way.
+
+New `tests/permissions/task-matrix.spec.ts` mirrors `deal-matrix.spec.ts`'s own exhaustive
+per-role/per-action style (M1.8's precedent for a `⚑` permission milestone) across all thirteen
+`task.*` actions - the first exhaustive, resource-shape-driven proof of every task action's scope
+for every role, not just the four named cases the generic `matrix.spec.ts` had. Tasks needed a
+5-shape grid, not deals' 4-shape one: a task has TWO independent person-relations (`assigneeId`/
+`assignedById`, "assigned"/"assigned_by"), where a deal has one (`ownerId`, "own"). That extra
+dimension is exactly what surfaces a real, easy-to-miss asymmetry this file now pins down as a
+named regression case: `task.reassign` grants `["assigned"]` only, never `["assigned_by"]` - the
+task's CURRENT assignee may hand it onward, but whoever originally assigned it away cannot reclaim
+it themselves without practice-wide reach. `assignTask`'s own comment already documented this;
+it was never actually regression-tested as a specific fact until now.
+
+Two real, disclosed gaps were found and fixed, not merely tested around:
+- `tests/rls/tasks.spec.ts`'s `task_assignments` immutability test only ever exercised the
+  migrator/superuser identity - extended to prove `forbid_mutation()` also blocks an authenticated
+  `tenant_admin` session, the same two-tier shape `tests/rls/audit_log.spec.ts` already established
+  for the other immutable ledger table in this schema. Doing this surfaced a genuine local-only
+  privilege gap: local Postgres's `authenticated` role has never had DELETE granted on ANY table
+  (only SELECT/INSERT/UPDATE) - a one-off historical grant predating this session that undershoots
+  the real hosted project's actual privilege model (which grants DELETE broadly too, with RLS alone
+  restricting it). A blanket "grant delete on all tables" fix was tried and immediately reverted -
+  it broke several OTHER tables' own already-passing "no hard delete" RLS tests, which assert a
+  THROWN "permission denied" error that stops being true once DELETE is genuinely granted and RLS
+  (correctly) reduces the statement to zero affected rows instead. Fixing every one of those
+  tests is real, valuable cleanup, but out of scope for this milestone - so `scripts/db-bootstrap-
+  local.sh` only grants DELETE on the two tables a real test exercises today
+  (`notification_preferences`, M4.8; `task_assignments`, M4.10), with the broader gap called out
+  explicitly in that script's own comment for whenever it's worth fixing properly.
+- `tests/integration/assign-task.spec.ts` never had an executive fixture user at all - added one,
+  plus a named "an executive cannot reassign a task at all, even though they can see it tenant-wide"
+  case, closing the one integration-level hole in the M4.10 backlog line's second named assertion
+  (executive denial for *creating* a task was already covered in `create-task.spec.ts`; reassigning
+  an existing one was not).
+
+Verified: typecheck, lint, unit (297, 69 new), RLS (237, 1 new), integration (re-run individually
+and confirmed green: `assign-task.spec.ts`'s new case, 9/9), and the full Playwright e2e suite (11,
+unchanged) all green. No new migration and no change to the real hosted project - this milestone's
+only fix (the local DELETE-grant gap) is scoped to the local RLS test harness alone.
+
 ## Commands
 
 ```

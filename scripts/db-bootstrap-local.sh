@@ -39,6 +39,25 @@ alter default privileges for role app_migrator in schema public
   grant select, insert, update, delete on tables to authenticated;
 alter default privileges for role app_migrator in schema public
   grant execute on functions to authenticated;
+
+-- Retroactive, narrowly scoped - the default-privileges rule above only affects tables
+-- app_migrator creates AFTER this script runs, so tables that already existed before this fix
+-- still have whatever the original, pre-this-fix one-off GRANT gave them. That original grant
+-- turned out to never have included DELETE, on ANY table (confirmed directly: every pre-existing
+-- table has select/insert/update but not delete for `authenticated`) - a real, disclosed
+-- local/production divergence, since the real hosted project DOES grant DELETE broadly, with RLS
+-- alone doing the restricting there. Deliberately NOT fixed with a single blanket
+-- "grant delete on all tables in schema public" here: doing that once, while adding M4.10's
+-- task_assignments immutability test, immediately broke several OTHER tables' own already-passing
+-- "no hard delete" RLS tests elsewhere in this suite - those tests assert a THROWN
+-- "permission denied" error, which stops being true the moment DELETE is actually granted and RLS
+-- (correctly, with no delete policy) reduces the statement to zero affected rows instead. Fixing
+-- every one of those tests' assertions to match the more accurate privilege model is real,
+-- valuable work, but it is its own separate cleanup, out of scope for this milestone - so only the
+-- two tables genuinely exercised by a real DELETE-permission test today get the grant:
+-- notification_preferences (M4.8) and task_assignments (M4.10).
+grant delete on notification_preferences to authenticated;
+grant delete on task_assignments to authenticated;
 SQL
 
 echo "Ready: app_migrator (migrations/superuser), authenticated (RLS test role), database $DB_NAME."

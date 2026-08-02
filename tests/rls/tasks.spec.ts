@@ -472,6 +472,40 @@ describe("task_assignments: 'the immutable reassignment ledger' - select-only, m
     ).rejects.toThrow(/append-only/);
     await expect(migrator.query("delete from task_assignments where id = $1", [assignment[0].id])).rejects.toThrow(/append-only/);
   });
+
+  // M4.10 exit criteria (docs/07-build-backlog.md): "reassignment history is never overwritten."
+  // The test above only proves this for the migrator/superuser identity - the same two-tier shape
+  // tests/rls/audit_log.spec.ts already established for the OTHER immutable ledger table in this
+  // codebase (its own "update raises for an authenticated tenant_admin identity too") is added here
+  // too, since forbid_mutation() blocking the table owner is a different, weaker guarantee than it
+  // also blocking a real signed-in session - even the role with the broadest reach anywhere else in
+  // this schema.
+  it("update and delete raise for an authenticated tenant_admin identity too, not just the migrator", async () => {
+    const { rows: task } = await migrator.query(
+      `insert into tasks (tenant_id, deal_id, title, assignee_id, assigned_by, due_date)
+       values ($1, $2, 'Immutable even for tenant_admin', $3, $3, current_date) returning id`,
+      [ids.tenantA, ids.dealOwnedByBde1, ids.bdeA1],
+    );
+    const { rows: assignment } = await migrator.query(
+      "insert into task_assignments (task_id, to_user_id, assigned_by) values ($1, $2, $2) returning id",
+      [task[0].id, ids.bdeA1],
+    );
+    const client = await asUser(ids.adminA);
+    await expect(
+      client.query("update task_assignments set to_user_id = $1 where id = $2", [ids.bdeA2, assignment[0].id]),
+    ).rejects.toThrow(/append-only|row-level security/);
+    await expect(client.query("delete from task_assignments where id = $1", [assignment[0].id])).rejects.toThrow(
+      /append-only|row-level security/,
+    );
+    await client.end();
+
+    const { rows: stillThere } = await migrator.query(
+      "select to_user_id from task_assignments where id = $1",
+      [assignment[0].id],
+    );
+    expect(stillThere).toHaveLength(1);
+    expect(stillThere[0].to_user_id).toBe(ids.bdeA1);
+  });
 });
 
 describe("task_comments: task.comment is 'visible' for both read and write - the same audience as task.view", () => {

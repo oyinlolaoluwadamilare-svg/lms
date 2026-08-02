@@ -39,6 +39,7 @@ const ids = {
   thirdBdeAuthId: "",
   directorAuthId: "",
   otherPracticeDirectorAuthId: "",
+  executiveAuthId: "",
 };
 
 function signIn(email: string): Promise<SupabaseClient> {
@@ -106,6 +107,11 @@ beforeAll(async () => {
     "M4.2 Director Other Practice",
     PASSWORD,
   );
+  // M4.10 exit criteria (docs/07-build-backlog.md): "an Executive cannot assign at all" - named
+  // for the reassignment path specifically, not left to tests/permissions/matrix.spec.ts's own
+  // generic write-action sweep and task-matrix.spec.ts's can()-level assertion alone. This fixture
+  // never had an executive user until now.
+  ids.executiveAuthId = await findOrCreateUser(service, ids.tenantId, "m4-2-executive@example.com", "M4.2 Executive", PASSWORD);
 
   await service.from("user_roles").delete().eq("tenant_id", ids.tenantId);
   await service.from("user_roles").insert([
@@ -119,6 +125,7 @@ beforeAll(async () => {
       role: "director",
       practice_line_id: ids.otherPracticeLineId,
     },
+    { tenant_id: ids.tenantId, user_id: ids.executiveAuthId, role: "executive", practice_line_id: null },
   ]);
 
   // D-03: accounts_select needs an account_practice_owners row (migration 0005).
@@ -231,6 +238,21 @@ describe("assignTask, end to end against a real signed-in session", () => {
     const taskId = await createTestTask({ assigneeId: ids.bdeAuthId, assignedById: ids.bdeAuthId });
 
     const client = await signIn("m4-2-bde-third@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await assignTask(client, session.actor, taskId, ids.practicePeerAuthId);
+    expect(result).toEqual({ ok: false, code: "denied" });
+  });
+
+  // M4.10 exit criteria's own second named case: "an Executive cannot assign at all." Even though
+  // the task is fully visible to them (task.view is tenant-wide for executive), task.reassign is
+  // null - denied, not not_found, the same distinction the practice-peer case above draws.
+  it("an executive cannot reassign a task at all, even though they can see it tenant-wide", async () => {
+    const taskId = await createTestTask({ assigneeId: ids.bdeAuthId, assignedById: ids.bdeAuthId });
+
+    const client = await signIn("m4-2-executive@example.com");
     const session = await getSessionActor(client);
     expect(session.status).toBe("active");
     if (session.status !== "active") return;
