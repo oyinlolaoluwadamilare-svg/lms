@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { daysBetweenInTimezone } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import { changeStage, getDealDetail, listPipelineDeals, updateDeal } from "@/services/deals";
+import { getStageHistory } from "@/services/stageEvents";
 import { findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M1.4/M1.5 exit criteria (docs/07-build-backlog.md): "Pipeline table view with the advanced
@@ -543,6 +544,46 @@ describe("changeStage", () => {
     // against this recomputation's millisecond precision - not network/clock slack, since every
     // timestamp compared here is a value already committed by Postgres, never a client-side "now."
     expect(Math.abs(Number(newEvent.duration_in_previous_seconds) - expectedDuration)).toBeLessThan(5);
+  });
+});
+
+// M2.4 (docs/07-build-backlog.md): "Stage-history panel on the deal, showing transitions with
+// actor, date and duration." Runs after the changeStage block above so there is real, non-empty
+// history to read - the advisory deal now carries at least the one Discovery -> Proposal
+// transition that block's own tests wrote (plus whatever accumulated from earlier real runs of
+// this suite, per this file's header comment).
+describe("getStageHistory", () => {
+  it("returns the deal's real stage_events history, newest first, with resolved stage/actor names", async () => {
+    const client = await signIn("m1-4-bde-advisory@example.com");
+    const history = await getStageHistory(client, ids.advisoryDealId);
+
+    expect(history.length).toBeGreaterThan(0);
+    // Newest first: every entry's occurred_at is >= the next one's.
+    for (let i = 0; i + 1 < history.length; i++) {
+      expect(new Date(history[i]!.occurredAt).getTime()).toBeGreaterThanOrEqual(new Date(history[i + 1]!.occurredAt).getTime());
+    }
+
+    const mostRecent = history[0]!;
+    expect(mostRecent).toMatchObject({
+      fromStageName: "Discovery",
+      toStageName: "Proposal",
+      actorName: "Bde Advisory",
+      isRegression: false,
+      isReconstructed: false,
+    });
+    expect(mostRecent.durationInPreviousSeconds).not.toBeNull();
+  });
+
+  it("a bde outside the deal's practice can't see its stage history - not_found reasoning, same RLS scope as the deal itself", async () => {
+    const client = await signIn("m1-4-bde-search@example.com");
+    const history = await getStageHistory(client, ids.advisoryDealId);
+    expect(history).toHaveLength(0);
+  });
+
+  it("a deal with no transitions yet returns an empty history, not an error", async () => {
+    const client = await signIn("m1-4-executive@example.com");
+    const history = await getStageHistory(client, ids.searchDealId);
+    expect(history).toHaveLength(0);
   });
 });
 

@@ -83,3 +83,66 @@ export async function getLatestStageEventOccurredAtByDeal(
   }
   return latest;
 }
+
+export interface StageHistoryEntry {
+  id: string;
+  fromStageName: string | null;
+  toStageName: string;
+  actorName: string | null;
+  occurredAt: string;
+  durationInPreviousSeconds: number | null;
+  isRegression: boolean;
+  isReconstructed: boolean;
+}
+
+interface StageHistoryRow {
+  id: string;
+  occurred_at: string;
+  duration_in_previous_seconds: string | null;
+  is_regression: boolean;
+  is_reconstructed: boolean;
+  from_stage: { name: string } | null;
+  to_stage: { name: string } | null;
+  actor: { full_name: string } | null;
+}
+
+// M2.4 (docs/07-build-backlog.md): "Stage-history panel on the deal, showing transitions with
+// actor, date and duration." Narrower than docs/06-ui-spec.md's full "Engagement timeline" (which
+// merges activities and stage events - M3.5, since activities don't exist yet): this is a
+// stage_events-only precursor, the same "build what the current schema can honestly serve" scoping
+// src/data/deals.ts's own listDeals comment already applies to "stage regression" as a filter.
+// Newest first, matching the eventual merged timeline's own ordering (docs/06-ui-spec.md).
+//
+// Reads through the caller's own RLS-scoped session, same reasoning as getDealDetail:
+// stage_events_select (migration 0007) already scopes rows to the caller's tenant/practice
+// entitlement (or tenant-wide for executive/tenant_admin) - there is no separate can() check for
+// viewing stage history, the same as there is none for deal.view itself.
+export async function listStageEventsForDeal(supabase: SupabaseClient, dealId: string): Promise<StageHistoryEntry[]> {
+  const { data, error } = await supabase
+    .from("stage_events")
+    .select(
+      "id, occurred_at, duration_in_previous_seconds::text, is_regression, is_reconstructed, " +
+        "from_stage:pipeline_stages!from_stage_id(name), to_stage:pipeline_stages!to_stage_id(name), " +
+        "actor:users!actor_id(full_name)",
+    )
+    .eq("deal_id", dealId)
+    .order("occurred_at", { ascending: false });
+
+  if (error) throw new Error(`listStageEventsForDeal failed: ${error.message}`);
+
+  return (data as unknown as StageHistoryRow[]).map((row) => {
+    if (!row.to_stage) {
+      throw new Error(`stage_events row ${row.id} has no resolvable to_stage (to_stage_id is not-null, but the join returned nothing)`);
+    }
+    return {
+      id: row.id,
+      fromStageName: row.from_stage?.name ?? null,
+      toStageName: row.to_stage.name,
+      actorName: row.actor?.full_name ?? null,
+      occurredAt: row.occurred_at,
+      durationInPreviousSeconds: row.duration_in_previous_seconds === null ? null : Number(row.duration_in_previous_seconds),
+      isRegression: row.is_regression,
+      isReconstructed: row.is_reconstructed,
+    };
+  });
+}

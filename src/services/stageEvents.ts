@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { insertStageEvent } from "@/data/stageEvents";
+import { insertStageEvent, listStageEventsForDeal, type StageHistoryEntry } from "@/data/stageEvents";
 import { createServiceClient } from "@/lib/supabase/service";
 import type { StageEvent, StageEventInput } from "@/domain/stageEvent";
 
@@ -18,4 +18,10 @@ export async function writeStageEvent(
   serviceClient: SupabaseClient = createServiceClient(),
 ): Promise<StageEvent> {
   return insertStageEvent(serviceClient, input);
+}
+
+// Passthrough so the deal detail page doesn't import src/data directly (app may only reach data
+// through services) - same reasoning as src/services/deals.ts's listPipelineDeals/getDealDetail.
+export async function getStageHistory(supabase: SupabaseClient, dealId: string): Promise<StageHistoryEntry[]> {
+  return listStageEventsForDeal(supabase, dealId);
 }

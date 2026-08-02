@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { daysBetweenInTimezone, resolveTimezone } from "@/lib/dates";
+import { daysBetweenInTimezone, formatDateInTimezone, formatDurationSeconds, resolveTimezone } from "@/lib/dates";
 
 describe("resolveTimezone", () => {
   it("uses the user's own override when set", () => {
@@ -52,5 +52,39 @@ describe("daysBetweenInTimezone", () => {
 
   it("counts several whole days correctly", () => {
     expect(daysBetweenInTimezone("2026-03-01T08:00:00Z", "2026-03-08T08:00:00Z", "Africa/Lagos")).toBe(7);
+  });
+});
+
+describe("formatDateInTimezone", () => {
+  it("renders DD/MM/YYYY - CLAUDE.md #8's default format", () => {
+    expect(formatDateInTimezone("2026-03-09T12:00:00Z", "UTC")).toBe("09/03/2026");
+  });
+
+  it("renders the LOCAL calendar date, not the UTC one, when the timezone shifts it", () => {
+    // 23:45 UTC on 9 March is already 00:45 on 10 March in Africa/Lagos (UTC+1).
+    expect(formatDateInTimezone("2026-03-09T23:45:00Z", "UTC")).toBe("09/03/2026");
+    expect(formatDateInTimezone("2026-03-09T23:45:00Z", "Africa/Lagos")).toBe("10/03/2026");
+  });
+});
+
+describe("formatDurationSeconds", () => {
+  it("renders sub-minute spans as 'under a minute'", () => {
+    expect(formatDurationSeconds(30)).toBe("under a minute");
+    expect(formatDurationSeconds(0)).toBe("under a minute");
+  });
+
+  it("renders whole minutes, singular and plural", () => {
+    expect(formatDurationSeconds(60)).toBe("1 minute");
+    expect(formatDurationSeconds(120)).toBe("2 minutes");
+  });
+
+  it("renders whole hours once at least one has elapsed", () => {
+    expect(formatDurationSeconds(3600)).toBe("1 hour");
+    expect(formatDurationSeconds(7200)).toBe("2 hours");
+  });
+
+  it("renders whole days once at least 24 hours have elapsed", () => {
+    expect(formatDurationSeconds(86_400)).toBe("1 day");
+    expect(formatDurationSeconds(86_400 * 3)).toBe("3 days");
   });
 });

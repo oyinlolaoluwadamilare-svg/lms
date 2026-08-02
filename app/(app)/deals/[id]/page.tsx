@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { formatMoney } from "@/domain/money";
+import { formatDateInTimezone, formatDurationSeconds } from "@/lib/dates";
 import { getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
+import { getStageHistory } from "@/services/stageEvents";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
@@ -16,13 +18,18 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params;
   const supabase = await createClient();
   const session = await getSessionActor(supabase);
+  const timezone = session.status === "active" ? session.timezone : "Africa/Lagos";
 
   // getDealDetail reads through this caller's own RLS-scoped session (migration 0005's
   // deals_select policy) - null means either the deal doesn't exist or this actor can't see it,
-  // deliberately not distinguished (same reasoning as changeStage's not_found case).
-  const [deal, editView] = await Promise.all([
+  // deliberately not distinguished (same reasoning as changeStage's not_found case). stageHistory
+  // reads through the same session (stage_events_select, migration 0007) - if the deal itself is
+  // invisible to this actor, this comes back empty rather than erroring, which the early return
+  // below makes moot anyway.
+  const [deal, editView, stageHistory] = await Promise.all([
     getDealDetail(supabase, id),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
+    getStageHistory(supabase, id),
   ]);
 
   if (!deal) {
@@ -52,11 +59,13 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
       </header>
 
       {/* Deliberately no next-action strip, last-engaged chip, most primary action buttons (Log
-          Activity, Add Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), engagement
-          timeline, stakeholders or open tasks here - docs/06-ui-spec.md's full Deal detail spec
-          includes all of these, but every one depends on an entity or action that doesn't exist
-          yet (activities: M3+; tasks: M4+; mark won/lost: M5.2-M5.3). Edit Deal above is the one
-          action that now exists (M1.7); this is otherwise the same read-only skeleton
+          Activity, Add Task, Advance Stage, Mark Won/Lost, Escalate, Add Contact), stakeholders or
+          open tasks here - docs/06-ui-spec.md's full Deal detail spec includes all of these, but
+          every one depends on an entity or action that doesn't exist yet (activities: M3+; tasks:
+          M4+; mark won/lost: M5.2-M5.3). Edit Deal above is the one action that now exists (M1.7);
+          the stage-history panel below is M2.4's narrower, stage_events-only precursor to the full
+          "Engagement timeline" the spec describes (which merges activities and stage events -
+          M3.5, blocked on activities existing). Otherwise this is the same read-only skeleton
           docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -118,6 +127,40 @@ export default async function DealDetailPage({ params }: { params: Promise<{ id:
           </dl>
         </section>
       </div>
+
+      <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
+        <h2 className="text-sm font-semibold text-ink">Stage history</h2>
+        {stageHistory.length === 0 ? (
+          <p className="text-sm text-muted">No stage transitions recorded yet.</p>
+        ) : (
+          <ol className="flex flex-col gap-2">
+            {stageHistory.map((entry) => (
+              <li
+                key={entry.id}
+                className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-sm first:border-t-0 first:pt-0"
+              >
+                <div>
+                  <p className="text-ink">
+                    {entry.fromStageName ? `${entry.fromStageName} → ${entry.toStageName}` : entry.toStageName}
+                    {entry.isRegression ? (
+                      <span className="ml-2 rounded-token bg-risk px-1.5 py-0.5 text-xs text-surface">Regression</span>
+                    ) : null}
+                  </p>
+                  <p className="text-xs text-muted">
+                    {entry.actorName ?? "System"} · {formatDateInTimezone(entry.occurredAt, timezone)}
+                    {entry.isReconstructed ? " · reconstructed" : ""}
+                  </p>
+                </div>
+                <p className="text-xs text-muted">
+                  {entry.durationInPreviousSeconds === null
+                    ? "—"
+                    : `${formatDurationSeconds(entry.durationInPreviousSeconds)} in previous stage`}
+                </p>
+              </li>
+            ))}
+          </ol>
+        )}
+      </section>
     </div>
   );
 }

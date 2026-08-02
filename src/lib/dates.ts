@@ -31,3 +31,31 @@ export function daysBetweenInTimezone(sinceISO: string, untilISO: string, timezo
   const untilUtc = Date.parse(`${calendarDateInTimezone(untilISO, timezone)}T00:00:00Z`);
   return Math.max(0, Math.round((untilUtc - sinceUtc) / DAY_MS));
 }
+
+// CLAUDE.md #8's default date display format, DD/MM/YYYY, rendered in the given timezone - en-GB
+// is just the shortest built-in Intl locale that formats this way, nothing British-specific about
+// it. Deliberately does not read tenants.date_format/users.date_format: no document in this repo
+// specifies what alternate format strings those columns may hold or how a caller would select
+// between them, so implementing an override here would be inventing a business rule rather than
+// following one - flagged as an open question rather than guessed, not yet worth blocking on since
+// every caller today only needs the documented default.
+export function formatDateInTimezone(isoInstant: string, timezone: string): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: timezone, day: "2-digit", month: "2-digit", year: "numeric" }).format(
+    new Date(isoInstant),
+  );
+}
+
+// A human-readable rendering of a stage_events.duration_in_previous_seconds value - whole days once
+// it's at least one, else whole hours, else whole minutes, else "under a minute". Presentational
+// only (how to phrase a number of seconds), not an analytic metric formula - docs/04-metric-
+// definitions.md's own "Time in stage" metric already defines the STATISTIC (median duration); this
+// just renders one already-computed value for the stage-history panel.
+export function formatDurationSeconds(totalSeconds: number): string {
+  if (totalSeconds < 60) return "under a minute";
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  const days = Math.floor(hours / 24);
+  return `${days} ${days === 1 ? "day" : "days"}`;
+}

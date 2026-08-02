@@ -10,8 +10,8 @@ Start here, in order:
    decisions already made (some currently **provisional**, pending product-owner confirmation).
 3. [`docs/07-build-backlog.md`](./docs/07-build-backlog.md) — the dependency-ordered milestone
    backlog (M0–M9). **M0 — Foundation is complete.** **M1 — Deals and pipeline is complete.**
-   Current milestone: **M2 — Engagement history**, through task M2.3 (staleness colour, M2.3's other
-   half, deliberately deferred to M3.7 — see the `## M2` section below).
+   Current milestone: **M2 — Engagement history**, through task M2.4. **M2 is complete** (staleness
+   colour, M2.3's other half, is deliberately deferred to M3.7 — see the `## M2` section below).
 4. [`docs/08-prompt-playbook.md`](./docs/08-prompt-playbook.md) — session-by-session prompts for
    driving the build.
 5. [`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`](./docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html) —
@@ -493,6 +493,38 @@ hardcoding a value that would only hold on a fresh fixture), and the full Playwr
 tests, unchanged - the seeded demo tenant this suite runs against has zero deals, so the new column
 never actually renders there; a populated view was verified manually against the real
 `m1-4-integration-test` fixture tenant instead, screenshotted for both table and board).
+
+**M2.4** adds a **stage-history panel** to the deal detail page - narrower than
+`docs/06-ui-spec.md`'s full "Engagement timeline" (which merges activities and stage events, M3.5,
+blocked on activities existing): a `stage_events`-only precursor, newest first, showing each
+transition's from/to stage, actor, date and duration in the previous stage, with a "Regression"
+badge where `is_regression` is true. This is M2's exit criterion made visible - "duration and
+regression are queryable" now has somewhere to actually look.
+
+`src/data/stageEvents.ts`'s new `listStageEventsForDeal` reads through the caller's own RLS-scoped
+session (`stage_events_select`, migration 0007) - the same "no separate `can()` check for viewing"
+reasoning `getDealDetail` already established for `deal.view`, since there's no distinct permission
+action for reading stage history either. Disambiguates the two `pipeline_stages` embeds (`from_stage`/
+`to_stage`) and the `users` embed (`actor`) the same way `owner:users!owner_id` already does
+elsewhere - `from_stage_id`/`to_stage_id` both reference the same table, so PostgREST needs the
+explicit `!column` hint or the join is ambiguous.
+
+Two new `src/lib/dates.ts` helpers, both used for the first time here: `formatDateInTimezone`
+(DD/MM/YYYY, CLAUDE.md #8's default, resolved in the viewer's timezone - not `tenants.date_format`/
+`users.date_format`; no document in this repo specifies what alternate format strings those columns
+may hold, so implementing an override would be inventing a business rule rather than following one -
+flagged, not guessed, and not yet worth blocking on since every caller today only needs the
+documented default) and `formatDurationSeconds` (a plain unit-scaled rendering of a duration in
+seconds - presentational, not a new analytic metric formula).
+
+Verified: typecheck, lint, unit (165 tests, 6 new for the two formatting helpers), RLS (112,
+unchanged), `test:integration` (34 tests, 3 new: real newest-first ordering and resolved names
+against the advisory deal's actual accumulated history, RLS exclusion for an out-of-practice bde,
+and an empty result - not an error - for a deal with no transitions yet), the full e2e suite (11,
+unchanged, same seeded-tenant-has-zero-deals limitation as M2.3), and a manual browser check against
+the real `m1-4-integration-test` fixture tenant confirming the rendered panel: correct DD/MM/YYYY
+dates, human-readable durations ("6 minutes", "under a minute"), and no false "Regression" badges
+on what is, in this fixture, an unbroken run of forward transitions.
 
 ## Commands
 
