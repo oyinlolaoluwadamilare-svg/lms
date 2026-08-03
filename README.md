@@ -1660,6 +1660,70 @@ and confirmed green: `assign-task.spec.ts`'s new case, 9/9), and the full Playwr
 unchanged) all green. No new migration and no change to the real hosted project - this milestone's
 only fix (the local DELETE-grant gap) is scoped to the local RLS test harness alone.
 
+**Milestone 4 (Tasks and delegation) is complete.** M5.1 (`outcome_reasons` admin configuration;
+`deal_outcomes` migration) starts Milestone 5 (Win/loss discipline and contacts) and is implemented
+and verified.
+
+New migration `0016` creates both tables, closing real gaps in `db/schema.sql`'s own reference
+definitions rather than reproducing them verbatim (the same discipline migration 0005 established
+for accounts/deals): `outcome_reasons.type` becomes a proper `outcome_type` enum instead of a bare
+`text check`; `outcome_reasons` gains `created_at`/`updated_at`/`created_by`/`updated_by`
+(schema.sql omits them, unlike its own `pipeline_stages` sibling) and a
+`unique (tenant_id, type, label)` constraint (schema.sql has none); `deal_outcomes` gains a
+`final_value_needs_currency` check alongside schema.sql's own `loss_requires_detail` check, kept
+verbatim. Applied to the real hosted project via the Management API, same as every migration since
+`0006`.
+
+Two decisions were deliberately left to the milestones that actually need them, not guessed now:
+how a loss reason gets recognised as "lost to competitor" (M5.2's own job), and whether a recorded
+outcome can ever be revised (nothing through M5.4 names that action, so `deal_outcomes` gets
+SELECT/INSERT policies only). RLS mirrors two existing tables exactly - `outcome_reasons` mirrors
+`pipeline_stages`, `deal_outcomes` mirrors `deals_select`/`deals_update` - rather than inventing new
+shapes.
+
+While adding a real DELETE-permission test for `task_assignments`' own immutability (M4.10's own
+exit criterion), a second local-only grant gap surfaced: literally every pre-existing local table
+was missing DELETE for `authenticated` (the real hosted project grants it broadly everywhere,
+confirmed directly) - the same class of gap M4.8 found for `notification_preferences`. A blanket
+fix immediately broke several other tables' own already-passing "no hard delete" tests elsewhere in
+the suite, so the fix (`scripts/db-bootstrap-local.sh`) stayed narrowly scoped to the two tables a
+real test actually exercises: `notification_preferences` and `task_assignments`. Fixing every other
+table's own assertions to match the more accurate model is real work, deliberately left as its own
+separate, disclosed cleanup rather than an unplanned tangent inside M5.1.
+
+Built `app/(app)/admin/outcome-reasons/` - this codebase's first admin CRUD screen.
+`src/services/outcomeReasons.ts` enforces `admin.manage_outcome_reasons` explicitly via `can()`,
+narrower than what migration 0016's own tenant-wide SELECT RLS would otherwise allow (the admin
+screen is deliberately not the same audience as "everyone who will eventually pick a reason when
+closing a deal," M5.3's own concern) - CLAUDE.md #1's "UI hiding is never the sole control" applies
+in the other direction here too: a route being tenant_admin-only doesn't excuse the service from
+checking `can()` itself. `admin.manage_outcome_reasons` was already correctly wired in
+`src/auth/permissions.ts` from early scaffolding but had never been called by anything until now,
+and had no named test case anywhere - both fixed as part of this milestone (a new case in
+`tests/permissions/matrix.spec.ts`).
+
+New `tests/rls/outcomeReasonsAndDealOutcomes.spec.ts` (17 tests, local Postgres) covers both
+tables' full RLS shape plus both check constraints. New `tests/integration/outcome-reasons.spec.ts`
+(4 tests, against the real hosted project, real signed-in sessions) proves the admin service end to
+end - list/create/(de)activate for tenant_admin, denial at the can() level for a bde even though
+RLS itself would let them read the table, and the duplicate-label constraint firing for real.
+Manual browser QA (real dev server, real hosted project, the existing QA tenant with a new
+tenant_admin user) confirmed create, deactivate and reactivate all work correctly - one screenshot
+briefly showed a stale client-render before `router.refresh()` settled (the same benign timing
+artifact this session's own QA has hit before, confirmed non-functional by a direct page reload
+showing the correct state immediately).
+
+One environment hiccup, not a code regression, worth recording since it briefly looked like one:
+a leftover `next-server` process from an earlier manual-QA session was still squatting port 3000,
+so a subsequent e2e run silently started its own dev server on port 3001 while Playwright's own
+`webServer` config (`reuseExistingServer: true` locally) kept talking to the STALE process on
+port 3000 - two unrelated, pre-existing tests failed against that stale server. Killing every
+leftover `next-server`/`next dev` process and restarting cleanly on port 3000 fixed it immediately;
+the full e2e suite (11/11) then passed against the current code.
+
+Verified: typecheck, lint, unit (298, 1 new), RLS (254, 17 new), integration (136, 4 new), and the
+full Playwright e2e suite (11, unchanged, after clearing the stale-process hiccup above) all green.
+
 ## Commands
 
 ```

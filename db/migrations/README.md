@@ -234,3 +234,61 @@ the real hosted project) proves `createTask`'s own new auto-watch behaviour, `cr
 invalid-mention-is-rejected cases), `addWatcher`'s self/other paths, and `resolveTaskComment`'s
 task-state-not-authorship scoping (including the executive-denied-at-can()-level case) - all run
 against real signed-in sessions, not a service-role client.
+
+`0016_outcome_reasons_and_deal_outcomes` (M5.1, the first migration of Milestone 5) was applied to
+the hosted project the same way - forward/backward-tested locally first, then applied for real via
+the Management API (same no-raw-TCP-egress constraint as every migration since `0006`);
+`schema_migrations` there now lists `0001` through `0016`. `db/schema.sql` has reference
+definitions for both tables (lines 108-115, 360-374), with real gaps this migration closes rather
+than reproduces verbatim, the same discipline migration 0005 established for accounts/deals:
+`outcome_reasons.type` becomes a proper `outcome_type` enum (schema.sql left it a bare
+`text check`, unlike every comparable closed-set column elsewhere in this schema);
+`outcome_reasons` gains `created_at`/`updated_at`/`created_by`/`updated_by` (schema.sql omits them
+entirely, unlike its own `pipeline_stages` sibling); a `unique (tenant_id, type, label)` constraint
+is added (schema.sql has no uniqueness constraint on this table at all); and
+`deal_outcomes` gains a `final_value_needs_currency` check (both null or both set, never
+half-populated) alongside schema.sql's own `loss_requires_detail` check, which is kept verbatim.
+
+Two decisions were deliberately NOT made in this migration, left to the milestones that actually
+need them: nothing gives `outcome_reasons` a structural flag for "this loss reason means
+lost-to-competitor" - M5.2's own backlog line ("lost-to-competitor requires a name") is what will
+decide how a reason is recognised as competitor-shaped; and `deal_outcomes` gets SELECT/INSERT
+policies only, no UPDATE/DELETE - `deal_id` is its own primary key (one outcome per deal, ever), and
+no doc or backlog line through M5.4 names a "revise a recorded outcome" action, the same
+"task_comments.resolved_at had no UPDATE policy until M4.9 specifically named the scope" precedent
+migrations 0011/0015 already established.
+
+RLS mirrors two existing tables exactly rather than inventing new shapes: `outcome_reasons` mirrors
+`pipeline_stages` (tenant-wide select, tenant_admin-only insert/update, no delete - deactivate via
+`is_active`); `deal_outcomes` mirrors `deals_select`/`deals_update` exactly (via the existing
+`deal_tenant_id()`/`deal_practice_line_id()`/`deal_owner_id()`/`deal_author_id()`/
+`is_deal_co_owner()` security-definer helpers from migration 0005) per
+`deal.mark_won`/`deal.mark_lost` sharing `deal.update`'s own own/practice/-/tenant scope in
+docs/02-permission-matrix.md. `admin.manage_outcome_reasons` itself needed no changes to
+`src/auth/permissions.ts` - it was already correctly wired (`tenant` for tenant_admin, denied
+elsewhere) from early scaffolding, just never called by anything until now; it gained its first
+named test case in `tests/permissions/matrix.spec.ts` all the same, since nothing had one before.
+
+A second local-only grant gap was found and fixed the same way M4.8's own DELETE-grant gap was:
+adding a real DELETE-permission test (this time for `task_assignments`' own immutability, closing
+M4.10's "reassignment history is never overwritten" exit criterion) revealed that literally every
+pre-existing local table was missing DELETE for `authenticated` (the real hosted project grants it
+broadly on all of them, confirmed directly). Deliberately NOT fixed with one blanket
+`grant delete on all tables in schema public` - doing that once immediately broke several OTHER
+tables' own already-passing "no hard delete" RLS tests elsewhere in the suite, which assert a
+THROWN "permission denied" error, an assumption that stops being true the moment DELETE is actually
+granted and RLS (correctly, with no delete policy) reduces the statement to zero affected rows
+instead. `scripts/db-bootstrap-local.sh` now grants DELETE narrowly, on only the two tables a real
+test actually exercises today (`notification_preferences`, `task_assignments`) - fixing every other
+table's own test assertions to match the more accurate privilege model is real, valuable work, left
+as its own separate, disclosed cleanup rather than an unplanned tangent here.
+
+`tests/rls/outcomeReasonsAndDealOutcomes.spec.ts` (17 tests, against local Postgres) covers both
+tables' RLS shape and both check constraints directly; `tests/integration/outcome-reasons.spec.ts`
+(4 tests, against the real hosted project) proves the admin service end to end through real
+signed-in sessions - a tenant_admin can list/create/(de)activate reasons, a bde is denied at the
+can() level for all three even though outcome_reasons_select's own RLS would let them read the
+table directly (the admin SCREEN's narrower scope is the service's own explicit can() check, not
+RLS alone), and the duplicate-label constraint is exercised for real. The admin UI itself
+(`app/(app)/admin/outcome-reasons/`) is this codebase's first admin CRUD screen - manual browser QA
+confirmed create, deactivate and reactivate all work end to end against the real hosted project.

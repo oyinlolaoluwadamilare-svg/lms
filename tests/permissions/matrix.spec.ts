@@ -299,4 +299,16 @@ describe("named deny/allow cases (docs/02-permission-matrix.md, docs/05-test-str
     expect(can(executive, "deal.view", resource)).toBe(true);
     expect(can(executive, "deal.update", resource)).toBe(false);
   });
+
+  // M5.1 (docs/07-build-backlog.md): "`outcome_reasons` admin configuration." This action's
+  // matrix entry (`tenant` for tenant_admin, denied for every other role) predates this milestone -
+  // it was already wired in src/auth/permissions.ts from early scaffolding - but M5.1 is the first
+  // time anything actually calls can() with it (src/services/outcomeReasons.ts), so it had no named
+  // case anywhere until now.
+  it("only tenant_admin can manage outcome reasons - every other role, including director, is denied", () => {
+    expect(can(actorWith("tenant_admin"), "admin.manage_outcome_reasons")).toBe(true);
+    for (const role of ["bde", "team_lead", "director", "executive"] as const) {
+      expect(can(actorWith(role), "admin.manage_outcome_reasons"), `${role} should not be able to manage outcome reasons`).toBe(false);
+    }
+  });
 });
