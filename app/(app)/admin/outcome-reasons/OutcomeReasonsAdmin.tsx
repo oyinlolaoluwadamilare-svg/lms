@@ -24,6 +24,7 @@ export function OutcomeReasonsAdmin({ reasons }: OutcomeReasonsAdminProps) {
 
   const [type, setType] = useState<OutcomeType>("win");
   const [label, setLabel] = useState("");
+  const [requiresCompetitorName, setRequiresCompetitorName] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -35,13 +36,19 @@ export function OutcomeReasonsAdmin({ reasons }: OutcomeReasonsAdminProps) {
     if (creating || label.trim().length === 0) return;
     setCreating(true);
     setError(null);
-    const result = await createOutcomeReasonAction({ type, label, sortOrder: String(nextSortOrder(type)) });
+    const result = await createOutcomeReasonAction({
+      type,
+      label,
+      sortOrder: String(nextSortOrder(type)),
+      requiresCompetitorName: type === "loss" && requiresCompetitorName,
+    });
     setCreating(false);
     if (!result.ok) {
       setError(result.message);
       return;
     }
     setLabel("");
+    setRequiresCompetitorName(false);
     router.refresh();
   }
 
@@ -69,7 +76,10 @@ export function OutcomeReasonsAdmin({ reasons }: OutcomeReasonsAdminProps) {
             <ul className="flex flex-col gap-1.5">
               {byType(t).map((reason) => (
                 <li key={reason.id} className="flex items-center justify-between gap-3 rounded-token border border-line bg-surface px-3 py-2">
-                  <span className={`text-sm ${reason.isActive ? "text-ink" : "text-muted line-through"}`}>{reason.label}</span>
+                  <span className={`text-sm ${reason.isActive ? "text-ink" : "text-muted line-through"}`}>
+                    {reason.label}
+                    {reason.requiresCompetitorName ? <span className="ml-2 text-xs text-muted">(requires competitor name)</span> : null}
+                  </span>
                   <button
                     type="button"
                     onClick={() => handleToggle(reason)}
@@ -102,6 +112,23 @@ export function OutcomeReasonsAdmin({ reasons }: OutcomeReasonsAdminProps) {
               <option value="loss">Loss</option>
             </select>
           </div>
+          {type === "loss" ? (
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor={`${idPrefix}-requires-competitor`} className="text-sm font-medium text-ink">
+                Competitor name
+              </label>
+              <label className="flex items-center gap-2 py-2 text-sm text-ink">
+                <input
+                  id={`${idPrefix}-requires-competitor`}
+                  type="checkbox"
+                  checked={requiresCompetitorName}
+                  onChange={(e) => setRequiresCompetitorName(e.target.checked)}
+                  className="h-4 w-4 rounded border-line"
+                />
+                Requires a competitor name
+              </label>
+            </div>
+          ) : null}
           <div className="flex flex-col gap-1.5">
             <label htmlFor={`${idPrefix}-label`} className="text-sm font-medium text-ink">
               Label

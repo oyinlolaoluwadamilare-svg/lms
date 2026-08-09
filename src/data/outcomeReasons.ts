@@ -8,6 +8,7 @@ export interface OutcomeReason {
   label: string;
   sortOrder: number;
   isActive: boolean;
+  requiresCompetitorName: boolean;
 }
 
 interface OutcomeReasonRow {
@@ -16,10 +17,20 @@ interface OutcomeReasonRow {
   label: string;
   sort_order: number;
   is_active: boolean;
+  requires_competitor_name: boolean;
 }
 
+const OUTCOME_REASON_COLUMNS = "id, type, label, sort_order, is_active, requires_competitor_name";
+
 function toDomain(row: OutcomeReasonRow): OutcomeReason {
-  return { id: row.id, type: row.type, label: row.label, sortOrder: row.sort_order, isActive: row.is_active };
+  return {
+    id: row.id,
+    type: row.type,
+    label: row.label,
+    sortOrder: row.sort_order,
+    isActive: row.is_active,
+    requiresCompetitorName: row.requires_competitor_name,
+  };
 }
 
 // For the admin config screen (M5.1) - every reason, active and inactive alike (an admin managing
@@ -28,7 +39,7 @@ function toDomain(row: OutcomeReasonRow): OutcomeReason {
 export async function listOutcomeReasons(supabase: SupabaseClient, tenantId: string): Promise<OutcomeReason[]> {
   const { data, error } = await supabase
     .from("outcome_reasons")
-    .select("id, type, label, sort_order, is_active")
+    .select(OUTCOME_REASON_COLUMNS)
     .eq("tenant_id", tenantId)
     .order("type")
     .order("sort_order");
@@ -37,11 +48,27 @@ export async function listOutcomeReasons(supabase: SupabaseClient, tenantId: str
   return (data as OutcomeReasonRow[]).map(toDomain);
 }
 
+// For closeDeal's (M5.2) own pre-validation - the reason type/tenant/requires-competitor-name
+// checks that give a clean CloseDealResult code instead of surfacing close_deal's raw exception
+// (migration 0017's own header comment: the RPC repeats these as a non-bypassable backstop, this
+// is the friendlier first check). Relies on outcome_reasons_select's RLS being tenant-wide (migration
+// 0016) to do the tenant scoping implicitly through the caller's own session, the same way
+// getStageById already does for pipeline_stages - a reason belonging to another tenant simply
+// isn't visible, so this returns null exactly as it would for a genuinely missing id.
+export async function getOutcomeReasonById(supabase: SupabaseClient, id: string): Promise<OutcomeReason | null> {
+  const { data, error } = await supabase.from("outcome_reasons").select(OUTCOME_REASON_COLUMNS).eq("id", id).maybeSingle();
+
+  if (error) throw new Error(`getOutcomeReasonById failed: ${error.message}`);
+  if (!data) return null;
+  return toDomain(data as OutcomeReasonRow);
+}
+
 export interface NewOutcomeReasonInput {
   tenantId: string;
   type: OutcomeType;
   label: string;
   sortOrder: number;
+  requiresCompetitorName: boolean;
   createdBy: string;
 }
 
@@ -53,9 +80,10 @@ export async function insertOutcomeReason(supabase: SupabaseClient, input: NewOu
       type: input.type,
       label: input.label,
       sort_order: input.sortOrder,
+      requires_competitor_name: input.requiresCompetitorName,
       created_by: input.createdBy,
     })
-    .select("id, type, label, sort_order, is_active")
+    .select(OUTCOME_REASON_COLUMNS)
     .single();
 
   if (error) throw new Error(`insertOutcomeReason failed: ${error.message}`);

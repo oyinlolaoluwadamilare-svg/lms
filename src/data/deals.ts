@@ -381,6 +381,7 @@ export interface DealForAuthorization {
   stageId: string;
   ownerId: string | null;
   authorId: string;
+  status: DealStatus;
 }
 
 // For any service's can() authorisation check against a deal - just enough of the deal to build
@@ -390,11 +391,13 @@ export interface DealForAuthorization {
 // (M3.2) turned out to need the exact same shape for its own can() check - a second caller with
 // identical requirements is a real pattern, not a coincidence worth duplicating. Deliberately not
 // reusing getDealWithStage: that function's shape is about money calculation, not authorisation,
-// and mixing the two would make it unclear which fields a future caller can rely on.
+// and mixing the two would make it unclear which fields a future caller can rely on. `status` was
+// added for closeDeal (M5.2), which needs to reject a deal that's already won/lost before ever
+// invoking close_deal - the other two callers simply ignore the field.
 export async function getDealForAuthorization(supabase: SupabaseClient, dealId: string): Promise<DealForAuthorization | null> {
   const { data, error } = await supabase
     .from("deals")
-    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id")
+    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id, status")
     .eq("id", dealId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -402,7 +405,15 @@ export async function getDealForAuthorization(supabase: SupabaseClient, dealId: 
   if (error) throw new Error(`getDealForAuthorization failed: ${error.message}`);
   if (!data) return null;
 
-  const row = data as { id: string; tenant_id: string; practice_line_id: string; stage_id: string; owner_id: string | null; author_id: string };
+  const row = data as {
+    id: string;
+    tenant_id: string;
+    practice_line_id: string;
+    stage_id: string;
+    owner_id: string | null;
+    author_id: string;
+    status: DealStatus;
+  };
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -410,12 +421,13 @@ export async function getDealForAuthorization(supabase: SupabaseClient, dealId: 
     stageId: row.stage_id,
     ownerId: row.owner_id,
     authorId: row.author_id,
+    status: row.status,
   };
 }
 
 // The only place deals.stage_id is written from application code - called exclusively by
 // src/services/deals.ts's changeStage (docs/03-architecture.md's single-path rule). Does not touch
-// status/actual_close_date: those belong to the not-yet-built closeDeal (M5.2), which is also why
+// status/actual_close_date: those belong exclusively to closeDeal (M5.2, src/services/deals.ts), which is also why
 // changeStage itself refuses a won/lost target stage before this is ever called - see
 // isOpenStage's comment in src/domain/deal.ts. updated_at/updated_by are not set here - migration
 // 0006's trigger sets both from auth.uid(), so a caller can't spoof who made the change.

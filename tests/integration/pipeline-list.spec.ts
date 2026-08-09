@@ -391,7 +391,7 @@ describe("getDealDetail", () => {
 // all of those have already passed. The three rejection cases don't mutate anything, so their
 // order relative to each other doesn't matter.
 describe("changeStage", () => {
-  it("refuses to move a deal into a won/lost stage - that's closeDeal's job (M5.2), not built yet", async () => {
+  it("refuses to move a deal into a won/lost stage - that's closeDeal's job (M5.2)", async () => {
     const client = await signIn("m1-4-bde-advisory@example.com");
     const session = await getSessionActor(client);
     expect(session.status).toBe("active");

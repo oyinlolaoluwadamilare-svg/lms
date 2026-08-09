@@ -11,12 +11,14 @@ const createSchema = z.object({
   type: z.enum(["win", "loss"]),
   label: z.string().trim().min(1, "A label is required"),
   sortOrder: z.coerce.number().int().min(0),
+  requiresCompetitorName: z.boolean(),
 });
 
 export async function createOutcomeReasonAction(input: {
   type: string;
   label: string;
   sortOrder: string;
+  requiresCompetitorName: boolean;
 }): Promise<CreateOutcomeReasonActionResult> {
   const parsed = createSchema.safeParse(input);
   if (!parsed.success) return { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid input." };

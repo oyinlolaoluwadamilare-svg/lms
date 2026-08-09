@@ -64,7 +64,7 @@ export function formatDealReference(sequenceNumber: number): string {
 }
 
 // docs/03-architecture.md names `changeStage` as "the only way a deal's stage changes," but that
-// same document makes `closeDeal` (docs/07-build-backlog.md M5.2, not built yet) the only path
+// same document makes `closeDeal` (docs/07-build-backlog.md M5.2, src/services/deals.ts) the only path
 // that may move a deal into a won/lost stage - it "writes the outcome row, the stage event, the
 // deal status... atomically. Cannot succeed without an outcome reason." A plain changeStage cannot
 // honour that (there is no outcome-reason mechanism until M5.1's outcome_reasons/deal_outcomes

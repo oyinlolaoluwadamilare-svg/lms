@@ -34,15 +34,21 @@ export type CreateOutcomeReasonResult = { ok: true; reason: OutcomeReason } | { 
 export async function createOutcomeReason(
   supabase: SupabaseClient,
   actor: Actor,
-  input: { type: OutcomeType; label: string; sortOrder: number },
+  input: { type: OutcomeType; label: string; sortOrder: number; requiresCompetitorName?: boolean },
 ): Promise<CreateOutcomeReasonResult> {
   if (!can(actor, "admin.manage_outcome_reasons")) return { ok: false, code: "denied" };
+
+  // requiresCompetitorName only means anything for a loss reason - migration 0017's own
+  // requires_competitor_name_only_for_loss check constraint is the authoritative backstop, this
+  // just avoids a doomed insert for a win reason ticked by mistake.
+  const requiresCompetitorName = input.type === "loss" && (input.requiresCompetitorName ?? false);
 
   const reason = await insertOutcomeReason(supabase, {
     tenantId: actor.tenantId,
     type: input.type,
     label: input.label,
     sortOrder: input.sortOrder,
+    requiresCompetitorName,
     createdBy: actor.id,
   });
 
@@ -52,7 +58,7 @@ export async function createOutcomeReason(
     entityType: "outcome_reason",
     entityId: reason.id,
     action: "admin.manage_outcome_reasons",
-    after: { type: reason.type, label: reason.label, sortOrder: reason.sortOrder },
+    after: { type: reason.type, label: reason.label, sortOrder: reason.sortOrder, requiresCompetitorName: reason.requiresCompetitorName },
   });
 
   return { ok: true, reason };

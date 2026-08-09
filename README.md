@@ -1724,6 +1724,54 @@ the full e2e suite (11/11) then passed against the current code.
 Verified: typecheck, lint, unit (298, 1 new), RLS (254, 17 new), integration (136, 4 new), and the
 full Playwright e2e suite (11, unchanged, after clearing the stale-process hiccup above) all green.
 
+**M5.2** ("`closeDeal` service: atomic outcome, stage event, status, open-task cancellation, audit.
+Closing is impossible without a reason; loss requires detail; lost-to-competitor requires a name.")
+is implemented and verified. This is the milestone that finally pays down a debt disclosed since
+M1.5: every compound write until now (`createDeal`, `changeStage`) was several sequential
+Supabase-client calls with an explicitly non-atomic gap, because PostgREST has no client-side
+multi-statement transaction. `closeDeal` touches four tables plus `audit_entries` in one write - the
+highest-risk compound write yet - so new migration `0017` builds the real fix instead: `close_deal`,
+a single `security definer` Postgres function invoked through one `.rpc()` call, wrapping the deal
+status/stage update, the `stage_events` insert, the `deal_outcomes` insert, open-task cancellation,
+and the audit entry in one genuine Postgres transaction. This is the first truly atomic compound
+write in this codebase - see `db/migrations/README.md`'s `0017` entry for the full reasoning,
+including a real bug (an untyped `case` expression in the target-stage lookup) the manual local
+verification pass caught before the migration ever reached the hosted project.
+
+Migration 0017 also resolves the one decision 0016 deliberately deferred: a reason is recognised as
+"lost to competitor" via a new `requires_competitor_name` boolean on `outcome_reasons`
+(tenant-admin-settable per reason, meaningless for a win reason by check constraint) rather than by
+matching a fragile label string or requiring a competitor name on every loss unconditionally. The
+existing outcome-reasons admin screen (M5.1) gained a checkbox for it, shown only for loss-type
+reasons - without this, the flag the whole feature depends on could never actually be set.
+
+`src/services/deals.ts`'s new `closeDeal` is the exclusive way a deal ever reaches won/lost -
+`changeStage` already refused a won/lost target stage since M1.5, specifically deferring to this
+function. Every check the RPC performs is duplicated here first (already-closed, reason
+tenant/type match, loss-requires-detail, competitor-name-required), the same "TS `can()` is the real
+gate, the privileged write repeats it as a non-bypassable backstop" split `writeStageEvent`/
+`writeAudit`/`sweep_overdue_tasks` already use - so a caller gets a clean `CloseDealResult` code
+instead of a raw Postgres exception. `deal.mark_won`/`deal.mark_lost` needed no new permission-matrix
+work: both already shared `deal.update`'s own/practice/-/tenant scope from M5.1's own survey and were
+already exhaustively covered by `tests/permissions/deal-matrix.spec.ts`'s generic `DEAL_ACTIONS`
+list.
+
+New `tests/rls/closeDeal.spec.ts` (9 tests, local Postgres) calls `close_deal` directly through real
+`authenticated` sessions, proving the RPC's atomicity (every rejected path leaves all four tables
+untouched), its rejection paths, and - deliberately, not as a gap - that it does not itself re-check
+per-deal authorisation, the same trust relationship `writeStageEvent`/`writeAudit` already have with
+their callers. New `tests/integration/close-deal.spec.ts` (8 tests, against the real hosted project,
+real signed-in sessions) proves `closeDeal`'s own TS-layer result codes end to end: a bde winning or
+losing their own deal, an executive denied before any write, and clean codes for every rejection
+path. Manual browser QA confirmed the admin screen's new checkbox: visible only for a loss-type
+reason, and a created competitor-required reason correctly shows a "(requires competitor name)"
+marker in the list. No new UI beyond that checkbox - the Mark Won/Mark Lost dialogs are M5.3's job.
+
+Verified: typecheck, lint, unit (298, unchanged), RLS (263, 9 new), integration (144, 8 new), and
+manual browser QA of the outcome-reasons admin checkbox, all green. The Playwright e2e suite was not
+re-run - no UI this milestone touches has e2e coverage today, and no existing e2e path exercises the
+outcome-reasons admin screen or any deal-closing flow.
+
 ## Commands
 
 ```

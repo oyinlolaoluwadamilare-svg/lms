@@ -27,6 +27,7 @@ import { getStageById, listAllStages, listOpenStages, type PipelineStageOption }
 // Re-exported for the same reason as DealListFilters/DealListRow above.
 export type { PipelineStageOption };
 import { listActiveUsersInTenant } from "@/data/users";
+import { getOutcomeReasonById, type OutcomeType } from "@/data/outcomeReasons";
 import { writeAudit } from "@/services/audit";
 import { writeStageEvent } from "@/services/stageEvents";
 import type { AppUser } from "@/domain/user";
@@ -193,7 +194,7 @@ export type ChangeStageResult =
 // 1. can() is checked here even though RLS's deals_update policy (migration 0005) enforces the same
 //    scope independently (CLAUDE.md #1 - a second, independent control, not the only one).
 // 2. The target stage must be an "open" stage_type. Moving a deal into a won/lost stage is the
-//    exclusive job of closeDeal (docs/07-build-backlog.md M5.2, not built yet), which requires an
+//    exclusive job of closeDeal (docs/07-build-backlog.md M5.2, below in this file), which requires an
 //    outcome reason this function has no way to collect or enforce - see isOpenStage's comment in
 //    src/domain/deal.ts. Rejecting here, not merely declining to render a drop target in the UI, is
 //    what makes this a real control and not presentation-only (CLAUDE.md #1).
@@ -209,7 +210,7 @@ export type ChangeStageResult =
 // M2.2 also names five other transition paths this same function must serve - edit form, API, bulk
 // action, mark-won, mark-lost - so every stage change writes exactly one event: none of those five
 // exist in this codebase yet (the edit form, M1.7, deliberately excludes stage; there is no API or
-// bulk-action surface; mark-won/mark-lost belong to closeDeal, M5.2, not built). Board drag (this
+// bulk-action surface; mark-won/mark-lost belong to closeDeal, M5.2, below in this file). Board drag (this
 // function) is the only real transition path today, and the only one actually exercised by
 // tests/integration/pipeline-list.spec.ts's stage_events assertions - each future path is required
 // to route through this same changeStage, not to reimplement any part of it.
@@ -265,6 +266,101 @@ export async function changeStage(
     before: { stageId: deal.stageId },
     after: { stageId: toStageId },
   });
+
+  return { ok: true };
+}
+
+export interface CloseDealInput {
+  result: OutcomeType;
+  reasonId: string;
+  reasonDetail: string | null;
+  competitorName: string | null;
+  finalValueMinor: bigint | null;
+  currencyCode: string | null;
+  actualCloseDate: string; // YYYY-MM-DD
+}
+
+export type CloseDealResult =
+  | { ok: true }
+  | {
+      ok: false;
+      code:
+        | "not_found"
+        | "denied"
+        | "already_closed"
+        | "reason_not_found"
+        | "reason_type_mismatch"
+        | "loss_requires_detail"
+        | "competitor_name_required";
+    };
+
+// M5.2 (docs/07-build-backlog.md): "`closeDeal` service: atomic outcome, stage event, status,
+// open-task cancellation, audit. Closing is impossible without a reason; loss requires detail;
+// lost-to-competitor requires a name." The exclusive way a deal ever reaches won/lost - changeStage
+// above refuses a won/lost target stage precisely so this is the only door in (isOpenStage's
+// comment in src/domain/deal.ts).
+//
+// Unlike changeStage/createDeal, this is not several sequential Supabase-client calls with a
+// disclosed non-atomicity gap: migration 0017's close_deal is a single `security definer` Postgres
+// function, invoked here through one .rpc() call, wrapping the deal update, the stage_events
+// insert, the deal_outcomes insert, open-task cancellation and the audit_entries insert in one real
+// transaction - the first genuinely atomic compound write in this codebase (see that migration's
+// own header comment for the reasoning). There is no separate writeStageEvent/writeAudit call here;
+// the RPC is both.
+//
+// Every check below duplicates one the RPC itself also performs (reason tenant/type match, loss
+// detail, competitor name) - the same "TS can() is the real gate, the privileged write repeats it
+// as a non-bypassable backstop" split this codebase already uses for writeStageEvent/writeAudit/
+// sweep_overdue_tasks. Checking here first turns what would otherwise be a raw Postgres exception
+// into a clean CloseDealResult code the UI (M5.3, not built yet) can render.
+export async function closeDeal(
+  supabase: SupabaseClient,
+  actor: Actor,
+  dealId: string,
+  input: CloseDealInput,
+): Promise<CloseDealResult> {
+  const deal = await getDealForAuthorization(supabase, dealId);
+  if (!deal) return { ok: false, code: "not_found" };
+
+  if (deal.status === "won" || deal.status === "lost") {
+    return { ok: false, code: "already_closed" };
+  }
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  const resource = {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  };
+  if (!can(actor, input.result === "win" ? "deal.mark_won" : "deal.mark_lost", resource)) {
+    return { ok: false, code: "denied" };
+  }
+
+  const reason = await getOutcomeReasonById(supabase, input.reasonId);
+  if (!reason) return { ok: false, code: "reason_not_found" };
+  if (reason.type !== input.result) return { ok: false, code: "reason_type_mismatch" };
+  if (input.result === "loss" && (input.reasonDetail ?? "").trim().length === 0) {
+    return { ok: false, code: "loss_requires_detail" };
+  }
+  if (reason.requiresCompetitorName && (input.competitorName ?? "").trim().length === 0) {
+    return { ok: false, code: "competitor_name_required" };
+  }
+
+  // bigint params travel as strings over PostgREST, same as every other minor-units column write in
+  // this codebase (src/data/deals.ts's applyDealEdit does the same .toString() before an insert).
+  const { error } = await supabase.rpc("close_deal", {
+    p_deal_id: dealId,
+    p_result: input.result,
+    p_reason_id: input.reasonId,
+    p_reason_detail: input.reasonDetail,
+    p_competitor_name: input.competitorName,
+    p_final_value_minor: input.finalValueMinor === null ? null : input.finalValueMinor.toString(),
+    p_currency_code: input.currencyCode,
+    p_actual_close_date: input.actualCloseDate,
+  });
+  if (error) throw new Error(`closeDeal failed: ${error.message}`);
 
   return { ok: true };
 }

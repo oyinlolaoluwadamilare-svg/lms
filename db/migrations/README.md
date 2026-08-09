@@ -292,3 +292,73 @@ table directly (the admin SCREEN's narrower scope is the service's own explicit 
 RLS alone), and the duplicate-label constraint is exercised for real. The admin UI itself
 (`app/(app)/admin/outcome-reasons/`) is this codebase's first admin CRUD screen - manual browser QA
 confirmed create, deactivate and reactivate all work end to end against the real hosted project.
+
+`0017_close_deal` (M5.2: "`closeDeal` service: atomic outcome, stage event, status, open-task
+cancellation, audit. Closing is impossible without a reason; loss requires detail; lost-to-
+competitor requires a name.") resolves both decisions migration 0016 explicitly deferred, and is the
+first migration in this codebase to introduce a genuinely atomic multi-table write.
+
+**Decision 1 - how a reason is recognised as competitor-shaped.** A new `requires_competitor_name
+boolean not null default false` column on `outcome_reasons`, tenant-admin-settable per reason (the
+existing admin screen gained a checkbox for it, shown only when editing a loss-type reason), guarded
+by a `requires_competitor_name_only_for_loss` check constraint so the flag is meaningless for a win
+reason. Rejected: matching a reserved/magic label string (fragile - labels are free-text and
+tenant-editable, migration 0016's own `unique (tenant_id, type, label)` constraint already treats
+them as such) and unconditionally requiring a competitor name whenever `result = 'loss'` (wrong -
+not every loss is to a competitor; docs/07-build-backlog.md's M5.4 "loss-reason report by ...
+competitor" only makes sense as a real reporting dimension if competitor genuinely can be absent).
+
+**Decision 2 - atomicity.** docs/03-architecture.md is explicit, not merely aspirational, here:
+"Every state change is a transaction that includes its audit entry. If the audit write fails, the
+business write rolls back." Every compound write built through M5.1 (`createDeal`, `changeStage`)
+instead used sequential Supabase-client calls with an explicitly disclosed non-atomicity gap -
+`src/services/audit.ts`, `src/services/stageEvents.ts` and `changeStage`'s own comment all named the
+same fix ("a single Postgres function invoked through one `.rpc()` call") without building it.
+`closeDeal` touches four tables (`deals`, `stage_events`, `deal_outcomes`, `tasks`) plus
+`audit_entries` in one write - the highest-risk compound write yet, where a partial failure means a
+deal silently looks won with no outcome record, or vice versa - so this migration finally pays that
+debt down: `close_deal` is a single `security definer` plpgsql function, invoked from
+`src/services/deals.ts`'s `closeDeal` through one `.rpc()` call, wrapping the deal status/stage
+update, the `stage_events` insert, the `deal_outcomes` insert, open-task cancellation (`status in
+('open','in_progress','blocked')`, unqualified by who assigned the task - `docs/01-domain-model.md`:
+"Closing a deal cancels remaining open tasks", not "tasks you assigned") and the `audit_entries`
+insert in one real Postgres transaction. This is the first genuinely atomic compound write in this
+codebase.
+
+Trust boundary, consistent with every other privileged write here (`writeStageEvent`, `writeAudit`,
+`sweep_overdue_tasks` - none independently re-verify role-scope authorisation inside the privileged
+write itself): `close_deal` does NOT re-implement `deal.mark_won`/`deal.mark_lost`'s own
+own/practice/tenant scope check - `src/services/deals.ts`'s `closeDeal` already calls `can()` before
+ever invoking the function, the same "TS `can()` is the real gate, the privileged write trusts it"
+split used since M2.1. What the function DOES check independently, as a non-bypassable backstop: the
+deal exists and belongs to the given tenant, the chosen reason belongs to the same tenant and
+matches the result type, and the competitor-name/loss-detail rules (the TS caller validates all of
+these too, for a clean result code instead of a raw exception). `forecast_category` is deliberately
+left untouched - nothing in the backlog or existing code auto-derives it. `auth.uid()` is used
+directly for every actor/author column, never a caller-supplied parameter, unaffected by running
+inside a `security definer` function (it reads the session-level JWT claim GUC, not the function
+owner's identity) - the same impersonation-proofing every actor_id/author_id column in this schema
+already relies on.
+
+Applied to the real hosted project via the Management API, same as every migration since `0006`;
+`schema_migrations` there now lists `0001` through `0017`. Verified locally first, including a real
+bug the manual verification pass caught before the hosted apply: the target-stage lookup's `case
+p_result when 'win' then 'won' else 'lost' end` compared directly against a `stage_type` column with
+no cast, so Postgres inferred the case expression as `text` and the comparison failed outright -
+fixed with an explicit `::stage_type` cast, then re-verified with the same manual SQL walkthrough
+(win close, loss close with detail, three independently rejected paths - missing detail, missing
+competitor name, reason/result type mismatch - each proven to leave every one of the four tables
+untouched, and a re-close of an already-won deal failing on `deal_outcomes`' own primary key rather
+than silently succeeding).
+
+`tests/rls/closeDeal.spec.ts` (9 tests, against local Postgres) exercises `close_deal` directly
+through real `authenticated` sessions (not the superuser migrator client), proving the atomicity and
+rejection paths above plus a deliberate trust-boundary case: a session with no business relationship
+to a specific deal can still call `close_deal` on it directly and succeed, since the function does
+not re-check `deal.mark_won`/`deal.mark_lost`'s own scope - documenting why `closeDeal` (the TS
+service) must never be bypassed, not treating it as a gap. `tests/integration/close-deal.spec.ts` (8
+tests, against the real hosted project, real signed-in sessions) proves `closeDeal`'s own TS-layer
+pre-validation end to end: a bde closing their own deal as won or lost, an executive denied before
+any write, and clean result codes (not raw exceptions) for already-closed, reason-type-mismatch,
+missing-loss-detail and missing-competitor-name. No new UI - `src/services/deals.ts`'s `closeDeal`
+is the whole of M5.2; the Mark Won/Mark Lost dialogs are M5.3's job.
