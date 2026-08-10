@@ -1915,6 +1915,82 @@ Verified: typecheck, lint, unit (303, 5 new), RLS (263, unchanged - no new migra
 integration (148, 3 new), and manual browser QA of `/analytics` for Team Lead/Executive/BDE against
 the real hosted project, all green.
 
+**M5.5** ("`contacts`, `deal_contacts` migrations; primary-contact invariant.") is schema and service
+layer only - no UI. The backlog itself splits this from M5.6 ("Contact management on the deal with
+decision-role badges"), and this milestone stays inside that line: migration `0018` plus just enough
+of a service layer to create a contact and link one to a deal correctly, not the Stakeholders panel
+or an "Add Contact" button.
+
+`db/schema.sql` already carried reference definitions for both tables, `decision_role` as a proper
+enum, and - already using the established idiom - a partial unique index enforcing "at most one
+primary contact per deal" (the same shape as `pipeline_stages`' own `one_won_stage`/`one_lost_stage`
+indexes). Migration 0018 reproduces both tables with the same discipline migrations 0005/0016
+already established: `contacts` gains `updated_at`/`updated_by`/`created_by` (schema.sql had only
+`created_at`) and RLS (schema.sql enabled it on neither table) - CLAUDE.md #2 and docs/01-domain-
+model.md's own opening rule win over the reference kit, as always. `deal_contacts` gets SELECT and
+INSERT policies only, no UPDATE/DELETE - the exact same reasoning migration 0016 gave for
+`deal_outcomes` ("no doc or backlog line names a 'revise a recorded outcome' action"): docs/02-
+permission-matrix.md names `contact.link_to_deal` (insert-shaped) but no unlink/reassign-primary/
+revise-decision-role action anywhere. That gap is real and disclosed, not silently worked around -
+M5.6 is the obvious milestone to name whichever action it turns out to need.
+
+**The primary-contact invariant, precisely.** docs/01-domain-model.md states it as "exactly one
+`is_primary = true` per deal when any contact exists" - the partial unique index alone only
+guarantees "at most one." Since `deal_contacts` is insert-only (previous paragraph), the only moment
+this can be established or broken is a deal's very first insert: a new trigger,
+`validate_deal_contact()`, rejects a first-contact insert unless it's marked primary - a
+non-bypassable DB backstop behind `src/services/contacts.ts`'s own friendlier default (the service
+decides `isPrimary` itself: true for a deal's first contact, false otherwise; a caller can't ask for
+anything else). The same trigger also enforces an invariant the docs state explicitly for the
+structurally identical `deal_co_owners` ("co-owner must belong to the deal's practice line") but
+never quite say in as many words for `deal_contacts`: a linked contact must belong to the same
+account as the deal. Left unenforced, a deal could be attributed a stakeholder from a completely
+unrelated client - no reading of "stakeholder" in docs/06-ui-spec.md's own Stakeholders section
+supports that, so this was treated as the same class of obvious-but-unstated structural requirement,
+not a business-rule ambiguity worth stopping for.
+
+**A real bug the manual local verification caught before the hosted apply**, the same kind of
+payoff migration 0017's own verification pass had: `validate_deal_contact()` was first written as a
+plain (invoker-rights) function, the same shape `stage_events_before_insert()`/
+`set_updated_at_and_by()` already use. That was wrong here specifically - the function's own
+internal reads (the deal's account, the contact's account, the deal's current contact count) were
+themselves subject to the CALLING actor's own RLS visibility, so a caller outside the deal's
+practice (who `deal_contacts_select` already hides every existing row from) saw a false "zero
+existing contacts" and tripped the wrong exception, masking what should have been a clean
+RLS-permission rejection. Fixed by making the trigger `security definer`, so its own reads always
+reflect ground truth regardless of who's calling; caught by `tests/rls/contacts.spec.ts`'s own
+"bde outside the deal's practice" case before this ever reached the hosted project.
+
+`src/services/contacts.ts`'s `createContact` and `linkContactToDeal` are the only two functions this
+milestone builds. Neither uses a single `can()`-Resource call the way most services in this codebase
+do: an account can be entitled to MORE than one practice line (`account_practice_owners` is
+many-to-many, migration 0005's own "practice lines that sell into the same client" reasoning), so
+`contact.create`/`contact.update`'s "practice" scope is checked against every practice line the
+account is entitled to (a new `listPracticeLineIdsForAccount` in `src/data/accounts.ts`), mirroring
+`account_has_entitled_practice()`'s own set-membership reasoning at the RLS layer rather than
+forcing a multi-owner resource into a single-`practiceLineId` shape. `linkContactToDeal` shares
+`deal.add_co_owner`'s own exact scope and Resource shape instead (own/practice/practice/-/tenant,
+built from the deal, not the contact) - `contact.link_to_deal` in docs/02-permission-matrix.md names
+that same scope precisely. Both actions were already fully scaffolded in `src/auth/permissions.ts`
+from early on (the same "scaffolded early, unused" situation M5.4 found for
+`analytics.view_practice`) but had no dedicated per-action scope test until now - new
+`tests/permissions/contact-matrix.spec.ts` (21 tests) closes that gap the same way
+`deal-matrix.spec.ts` already does for deal actions.
+
+New `tests/rls/contacts.spec.ts` (11 tests, local Postgres) proves both tables' RLS shape and both
+trigger-enforced invariants directly. New `tests/integration/contacts.spec.ts` (7 tests, against the
+real hosted project, real signed-in sessions) proves the service layer end to end: a bde entitled to
+an account can create a contact there and link it to their own deal (becoming primary automatically,
+being the deal's first); a bde with no entitlement is denied creating one; a bde outside the deal's
+practice can't even see the deal (`not_found`, the same RLS-invisibility precedent `changeStage`/
+`logActivity` already established, not a new `denied` shape); linking a contact from a different
+account is rejected with a clean `contact_wrong_account` code rather than a raw exception from the
+trigger; and linking the same contact twice is rejected as `already_linked`.
+
+Verified: typecheck, lint, unit (324, 21 new), RLS (274, 11 new), integration (155, 7 new), all
+green. No manual browser QA this milestone - there is no UI to QA (see this entry's own opening
+paragraph).
+
 ## Commands
 
 ```

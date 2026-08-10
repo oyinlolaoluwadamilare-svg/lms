@@ -382,6 +382,7 @@ export interface DealForAuthorization {
   ownerId: string | null;
   authorId: string;
   status: DealStatus;
+  accountId: string;
 }
 
 // For any service's can() authorisation check against a deal - just enough of the deal to build
@@ -393,11 +394,13 @@ export interface DealForAuthorization {
 // reusing getDealWithStage: that function's shape is about money calculation, not authorisation,
 // and mixing the two would make it unclear which fields a future caller can rely on. `status` was
 // added for closeDeal (M5.2), which needs to reject a deal that's already won/lost before ever
-// invoking close_deal - the other two callers simply ignore the field.
+// invoking close_deal - the other two callers simply ignore the field. `accountId` was added for
+// linkContactToDeal (M5.5), which needs it for a clean pre-check that a contact belongs to the same
+// account as the deal, before ever reaching migration 0018's own non-bypassable trigger backstop.
 export async function getDealForAuthorization(supabase: SupabaseClient, dealId: string): Promise<DealForAuthorization | null> {
   const { data, error } = await supabase
     .from("deals")
-    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id, status")
+    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id, status, account_id")
     .eq("id", dealId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -413,6 +416,7 @@ export async function getDealForAuthorization(supabase: SupabaseClient, dealId: 
     owner_id: string | null;
     author_id: string;
     status: DealStatus;
+    account_id: string;
   };
   return {
     id: row.id,
@@ -422,6 +426,7 @@ export async function getDealForAuthorization(supabase: SupabaseClient, dealId: 
     ownerId: row.owner_id,
     authorId: row.author_id,
     status: row.status,
+    accountId: row.account_id,
   };
 }
 
