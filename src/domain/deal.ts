@@ -36,6 +36,32 @@ export function dealValue(deal: DealForCalculation): Money | null {
   return { amountMinor, currency: deal.currencyCode };
 }
 
+// docs/04-metric-definitions.md "Value bands" - flagged there, and in docs/DECISIONS.md's D-12, as
+// an UNCONFIRMED DEFAULT (asked of the product owner, not yet answered) rather than a settled
+// business rule; revisit both docs together if the boundaries change. Defined in NGN minor units
+// (kobo) only - decision D-08b (multi-currency/reporting-currency handling) remains open, so a
+// value in any other currency has no real meaning against these boundaries yet.
+export type ValueBand = "under_5m" | "5m_25m" | "25m_100m" | "100m_plus" | "not_recorded";
+
+export const VALUE_BAND_LABELS: Record<ValueBand, string> = {
+  under_5m: "Under ₦5,000,000",
+  "5m_25m": "₦5,000,000 – ₦24,999,999",
+  "25m_100m": "₦25,000,000 – ₦99,999,999",
+  "100m_plus": "₦100,000,000 and above",
+  not_recorded: "Value not recorded",
+};
+
+// "not_recorded" is its own band, never folded into "under_5m" - the same "null is not zero"
+// reasoning dealValue's own comment already gives: a deal nobody ever valued is a different fact
+// from a deal valued small, and merging the two would silently misrepresent the first as the second.
+export function valueBand(amountMinor: bigint | null): ValueBand {
+  if (amountMinor === null) return "not_recorded";
+  if (amountMinor < 500_000_000n) return "under_5m";
+  if (amountMinor < 2_500_000_000n) return "5m_25m";
+  if (amountMinor < 10_000_000_000n) return "25m_100m";
+  return "100m_plus";
+}
+
 // docs/01-domain-model.md: "weighted_value | value multiplied by probability, computed at query
 // time" - never stored. docs/04-metric-definitions.md "Weighted forecast": deal value multiplied
 // by probability, where probability is coalesce(probability_override, stage.probability_threshold)

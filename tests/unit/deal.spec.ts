@@ -6,6 +6,7 @@ import {
   isOpenStage,
   resolveProbability,
   stalenessBand,
+  valueBand,
   weightedValue,
 } from "../../src/domain/deal";
 import { formatMoney, parseMoneyMinor, toMajorUnitsString, toMinorUnits } from "../../src/domain/money";
@@ -48,6 +49,35 @@ describe("dealValue", () => {
   it("returns null (not zero) when neither value is set", () => {
     const deal = { proposalValueMinor: null, negotiatedValueMinor: null, currencyCode: "NGN", probabilityOverride: null };
     expect(dealValue(deal)).toBeNull();
+  });
+});
+
+// docs/04-metric-definitions.md "Value bands" (flagged there, and in docs/DECISIONS.md's D-12, as
+// an unconfirmed default) - boundaries in NGN minor units (kobo): under 5,000,000 / 500,000,000
+// minor.
+describe("valueBand", () => {
+  it("returns not_recorded for null, never folding it into the lowest band", () => {
+    expect(valueBand(null)).toBe("not_recorded");
+  });
+
+  it("returns under_5m for zero and for values just below the boundary", () => {
+    expect(valueBand(0n)).toBe("under_5m");
+    expect(valueBand(499_999_999n)).toBe("under_5m");
+  });
+
+  it("returns 5m_25m at the lower boundary and just below the upper one", () => {
+    expect(valueBand(500_000_000n)).toBe("5m_25m");
+    expect(valueBand(2_499_999_999n)).toBe("5m_25m");
+  });
+
+  it("returns 25m_100m at the lower boundary and just below the upper one", () => {
+    expect(valueBand(2_500_000_000n)).toBe("25m_100m");
+    expect(valueBand(9_999_999_999n)).toBe("25m_100m");
+  });
+
+  it("returns 100m_plus at the boundary and for arbitrarily large values", () => {
+    expect(valueBand(10_000_000_000n)).toBe("100m_plus");
+    expect(valueBand(999_999_999_999n)).toBe("100m_plus");
   });
 });
 

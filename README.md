@@ -1845,6 +1845,76 @@ Verified: typecheck, lint, unit (298, unchanged), RLS (263, unchanged - no new m
 milestone), integration (145, 1 new), and full manual browser QA of both dialogs against the real
 hosted project, all green.
 
+**M5.4** ("Loss-reason report by practice, value band and competitor.") gives `/analytics` its first
+real content - the stub that has existed since early scaffolding is replaced with this report; no
+migration was needed, since everything it reads (`deal_outcomes`, `deals`, `outcome_reasons`) already
+existed from M5.1/M5.2.
+
+**A genuine metric-definition gap, surfaced rather than guessed at.** "Value band" is one of this
+report's three named dimensions, but no boundary values existed anywhere in this repository's
+authoritative docs before now - `docs/04-metric-definitions.md`'s own opening rule is explicit:
+"never invent a metric formula... if a metric you need is not defined here, stop and ask." The user
+was asked directly (four bands, three coarser bands, or custom boundaries) and did not answer before
+work continued. Per this session's own established precedent for an unanswered business-rule
+question (first set by M5.2's atomicity decision), the recommended four-band option was adopted as a
+clearly flagged, reversible default rather than silently invented: **under ₦5,000,000 / ₦5,000,000 –
+₦24,999,999 / ₦25,000,000 – ₦99,999,999 / ₦100,000,000 and above**, plus a fifth **"Value not
+recorded"** band for a deal with neither `negotiated_value_minor` nor `proposal_value_minor` set -
+kept distinct rather than folded into the lowest band, the same "null is not zero" reasoning this
+file's own "Open pipeline value" definition already establishes. This is now logged three places, in
+sync: `docs/04-metric-definitions.md`'s new "Loss analysis" section (marked ⚠ unconfirmed), a new
+open question **D-12** in `docs/DECISIONS.md`, and `src/domain/deal.ts`'s own `valueBand` function
+comment. **This needs real product-owner confirmation before the report is relied on for anything.**
+
+The report bands the deal's own `coalesce(negotiated_value_minor, proposal_value_minor)` -
+deliberately never `deal_outcomes.final_value_minor`, which this product only ever populates for a
+*won* deal (M5.3's `markDealLostAction` always sends it `null`; there is nothing to band for a loss
+otherwise, a real design consequence of M5.3's own scope that M5.4 had to account for, not a gap in
+M5.4 itself).
+
+No new permission action was needed - `analytics.view_practice` in `docs/02-permission-matrix.md`
+already had exactly the right shape (BDE denied, Team Lead/Director scoped to their own practice,
+Executive/Tenant Admin tenant-wide) from early scaffolding, never previously exercised by any real
+read. `src/services/reports.ts`'s `getLossReasonReport` derives its scope directly from the actor's
+own role grants - the same pattern `src/services/tasks.ts`'s `getTeamOverview` already established
+for a multi-record breakdown with no single resource to check `can()` against - rather than
+inventing a new shape. `src/data/dealOutcomes.ts`'s `listLossOutcomesForReport` queries FROM `deals`
+(filtering `status = 'lost'`, `is_demo = false`, soft-deleted excluded) embedding `deal_outcomes` and
+`outcome_reasons`, mirroring `listDeals`'s own base-table-first convention rather than querying FROM
+`deal_outcomes` and filtering an embedded relationship, which PostgREST does not support cleanly -
+verified directly against the real hosted project that the embed resolves to a single object, not an
+array, since `deal_outcomes.deal_id` is both its own primary key and deals' foreign key.
+
+The report itself is four independent count breakdowns (by reason, by practice, by value band, by
+competitor) against one shared filtered dataset, not a single four-dimensional pivot table - the
+literal reading of the backlog's own "by practice, value band and competitor" wording, and a real
+scope decision consistent with this session's running "no premature abstraction" theme: a combined
+pivot would explode into mostly-empty cells for a first version nobody asked for. `byValueBand`
+alone lists every band even at zero - the fixed, small taxonomy is exactly the case where "zero in
+this band" is real information, unlike the open-ended reason/practice/competitor sets, which only
+list values that actually occurred. `docs/06-ui-spec.md`'s cross-cutting Analytics rule (period
+label, comparison basis, sample size, exclusions footnote) is honoured on every panel even though
+this is the only one that exists yet: period "All time" (no date filter - M5.4's own line names
+none, unlike M4.7's explicit filter spec), comparison basis "None — single snapshot", sample size
+the total loss count, exclusions naming soft-deleted and demo rows plainly.
+
+New `tests/unit/deal.spec.ts` coverage (5 new tests) proves `valueBand`'s boundaries exactly, band by
+band. New `tests/integration/loss-reason-report.spec.ts` (3 tests, against the real hosted project,
+real signed-in sessions) proves the scope derivation and the counts themselves: a BDE denied
+entirely, a Team Lead seeing only their own practice's two losses (the third, in another practice,
+invisible to them), and an Executive seeing all three tenant-wide including the value-not-recorded
+one, with every value band listed even at zero. All three deals were seeded directly as already-lost
+via the service client rather than through `closeDeal` - no `stage_events` row is ever written for
+them, so unlike the M5.2/M5.3 fixtures they carry none of that table's `forbid_mutation`-triggered
+permanence and are safely delete-and-recreated on every run. Manual browser QA against the real
+hosted project confirmed the rendered report matches the integration tests' own counts exactly for
+both a Team Lead (their own practice only) and an Executive (tenant-wide), and confirmed a BDE sees
+a clear "not available for your role" message rather than the report.
+
+Verified: typecheck, lint, unit (303, 5 new), RLS (263, unchanged - no new migration this milestone),
+integration (148, 3 new), and manual browser QA of `/analytics` for Team Lead/Executive/BDE against
+the real hosted project, all green.
+
 ## Commands
 
 ```

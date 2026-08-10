@@ -50,6 +50,47 @@ formula and the inputs in a tooltip, so the number is auditable.
 **Stage regression rate.** Deals with at least one `is_regression = true` event in the period,
 over active deals. A leading loss indicator that most tools never surface.
 
+## Loss analysis (Milestone 5)
+
+**Value bands** — ⚠ **UNCONFIRMED DEFAULT, not a product-owner decision.** No band boundaries
+existed anywhere in this repository before M5.4 needed one for its loss-reason report; the reference
+benchmark PRD (`docs/reference/pipeline-intelligence-benchmark-and-prd-v1.html`, not an authoritative
+spec doc per this file's own opening rule) names "value band" as a dimension but gives no boundary
+values. The user was asked directly (four bands vs. three vs. custom) and did not answer before work
+continued; per this session's own precedent for an unanswered business-rule question, the following
+was adopted as the flagged, reversible default rather than silently invented:
+
+- **Under ₦5,000,000**
+- **₦5,000,000 – ₦24,999,999**
+- **₦25,000,000 – ₦99,999,999**
+- **₦100,000,000 and above**
+- **Value not recorded** — a deal with neither `negotiated_value_minor` nor `proposal_value_minor`
+  set. Kept as its own distinct band rather than folded into "Under ₦5,000,000", the same "null is
+  not zero" reasoning this file's own "Open pipeline value" and "Days since last engagement"
+  definitions already establish - collapsing an unknown value into the smallest band would silently
+  misrepresent "never valued" as "valued and small."
+
+Defined in NGN only, matching every other money example in this codebase (no currency picker exists
+anywhere yet, decision **D-08b** on multi-currency/reporting-currency handling remains open) - a
+deal recorded in a different currency would need real FX handling before these boundaries mean
+anything for it, which is out of scope here. **Revisit this definition with the product owner before
+relying on it for anything beyond the M5.4 report it was built for** - update this entry in place if
+the boundaries change, rather than letting the report's own code silently drift from this doc.
+
+**Loss-reason report.** For `deal_outcomes` rows with `result = 'loss'`, scoped to the viewer's role
+(own practice for Team Lead/Director, tenant-wide for Executive/Tenant Admin, per
+`analytics.view_practice` in `docs/02-permission-matrix.md`; a BDE cannot reach this report at all -
+`analytics.view_practice` is denied for that role). Value is the deal's own
+`coalesce(negotiated_value_minor, proposal_value_minor)` at read time (this file's own "Open pipeline
+value" formula) - never `deal_outcomes.final_value_minor`, which this product only ever records for a
+*won* deal (`src/services/deals.ts` `closeDeal`'s own loss path always sends it `null`; there is
+nothing to band for a loss otherwise). Broken down three ways, each a simple count grouped by one
+dimension against the same filtered set - by `outcome_reasons.label`, by `deals.practice_line_id`,
+by the value band above, and by `deal_outcomes.competitor_name` (grouping every `null` together as
+"Not specified", never silently dropped). Excludes soft-deleted deals and every `is_demo = true` row
+(this file's own opening rule). No minimum-sample suppression - unlike a percentage, a raw count of
+zero is itself the honest, correctly-displayed answer ("no losses recorded"), not a misleading one.
+
 ## Engagement metrics — the reason the event layer exists
 
 **Days since last engagement.** `current_date − deals.last_engaged_at`. Null last-engaged means

@@ -28,6 +28,19 @@ this build. `tenants.reporting_currency` in `db/schema.sql` currently defaults t
 system a real connector should target and its payload contract, needed when M9.7 is actually built.
 No immediate blocker.
 
+### D-12 — What are the loss-reason report's "value band" boundaries?
+**Blocks:** `docs/04-metric-definitions.md`'s "Value bands" definition and M5.4's loss-reason report,
+which both currently ship against a flagged, unconfirmed default rather than this question being
+resolved first.
+**Status:** asked directly (four bands under ₦5M/₦5–25M/₦25–100M/₦100M+, three coarser bands, or
+custom boundaries) and not yet answered. Per this file's own header rule this should have blocked
+work; it did not, because the session's standing instruction was to continue past an unanswered
+question with the most-recommended option flagged rather than stall - the same precedent M5.2's
+atomicity question set. **The four-band default above is live in the report today. Confirm or
+replace it with the product owner before this report is relied on for any real decision**, and
+update `docs/04-metric-definitions.md`'s own entry to match whatever is decided, the same way
+`tenants.reporting_currency`'s D-08b note tracks its own still-open half.
+
 ---
 
 ## Part B — Decisions made
