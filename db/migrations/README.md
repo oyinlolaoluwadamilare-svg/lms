@@ -362,3 +362,68 @@ pre-validation end to end: a bde closing their own deal as won or lost, an execu
 any write, and clean result codes (not raw exceptions) for already-closed, reason-type-mismatch,
 missing-loss-detail and missing-competitor-name. No new UI - `src/services/deals.ts`'s `closeDeal`
 is the whole of M5.2; the Mark Won/Mark Lost dialogs are M5.3's job.
+
+`0018_contacts_and_deal_contacts` (M5.5: "`contacts`, `deal_contacts` migrations; primary-contact
+invariant.") reproduces `db/schema.sql`'s own reference definitions for both tables (lines 148-163,
+220-229) - including its `decision_role` enum and its `one_primary_contact` partial unique index,
+the same idiom `pipeline_stages`' own `one_won_stage`/`one_lost_stage` indexes already established -
+with the same deviations-from-the-reference-kit discipline migrations 0005/0016 already set: `contacts`
+gains `updated_at`/`updated_by`/`created_by` (schema.sql had only `created_at`) and both tables gain
+RLS (schema.sql enabled it on neither) - CLAUDE.md #2 and docs/01-domain-model.md's opening rule win
+over the reference kit, as always. `deal_contacts` gets SELECT and INSERT policies only, no
+UPDATE/DELETE - the identical reasoning migration 0016 gave for `deal_outcomes` ("no doc or backlog
+line names a 'revise a recorded outcome' action"): `contact.link_to_deal` in docs/02-permission-
+matrix.md is insert-shaped, and no unlink/reassign-primary/revise-decision-role action exists
+anywhere yet. Not invented here - left for whichever future milestone (M5.6, plausibly) actually
+names that action.
+
+**The primary-contact invariant, precisely.** docs/01-domain-model.md's own wording is "exactly one
+`is_primary = true` per deal when any contact exists" - the partial unique index alone only
+guarantees "at most one," not "at least one once contacts exist." Because `deal_contacts` is
+insert-only (previous paragraph - no update path exists to promote a later contact to primary), the
+only moment this half of the invariant can be established or broken is a deal's very first insert: a
+new trigger function, `validate_deal_contact()`, rejects an attempt to insert a deal's first contact
+with `is_primary = false` - a non-bypassable DB-level backstop behind `src/services/contacts.ts`'s
+own friendlier default (`linkContactToDeal` decides `isPrimary` itself, true for a deal's first
+contact and false otherwise; a caller has no way to ask for anything else). The same trigger also
+enforces an invariant `docs/01-domain-model.md` states explicitly for the structurally identical
+`deal_co_owners` ("co-owner must belong to the deal's practice line") but never says outright for
+`deal_contacts`: a linked contact must belong to the same account as the deal. Treated as the same
+class of obvious-but-unstated structural requirement, not a business-rule ambiguity worth
+escalating - no reading of "stakeholder" in `docs/06-ui-spec.md`'s own Stakeholders section supports
+attributing a deal to a contact from a completely unrelated client.
+
+**A real bug the manual local verification pass caught before the hosted apply**, the same payoff
+migration 0017's own verification found: `validate_deal_contact()` was first written as a plain
+(invoker-rights) function, the same shape `stage_events_before_insert()`/`set_updated_at_and_by()`
+already use correctly for their own purposes. That shape was wrong here specifically - the
+function's own internal reads (the deal's account, the contact's account, the deal's current contact
+count) were themselves subject to the CALLING actor's own RLS visibility, so a caller outside the
+deal's practice (whom `deal_contacts_select` already hides every existing row from) saw a false
+"zero existing contacts" and tripped the wrong exception, masking what should have been a clean
+RLS-permission rejection with a misleading "first contact must be primary" one instead. Fixed by
+making the trigger `security definer`, so its own reads always reflect ground truth regardless of
+who's calling - caught by `tests/rls/contacts.spec.ts`'s own "bde outside the deal's practice" case
+before this was ever applied to the hosted project (the buggy version had already been applied once;
+the fix was reapplied as a targeted `create or replace function`, verified `security_type = DEFINER`
+via `information_schema.routines` afterward).
+
+Applied to the real hosted project via the Management API, same as every migration since `0006`;
+`schema_migrations` there now lists `0001` through `0018`. `tests/rls/contacts.spec.ts` (11 tests,
+against local Postgres) proves both tables' RLS shape (`contacts` mirrors `accounts_select`/
+`accounts_update` exactly via `account_has_entitled_practice()`; `deal_contacts` mirrors
+`deal_co_owners_select`/`deal_co_owners_insert` exactly, per `contact.link_to_deal` sharing
+`deal.add_co_owner`'s own own/practice/practice/-/tenant scope) and both trigger-enforced invariants
+directly. `tests/integration/contacts.spec.ts` (7 tests, against the real hosted project, real
+signed-in sessions) proves `createContact`/`linkContactToDeal` end to end: an entitled bde creates a
+contact and links it to their own deal (becoming primary automatically, being the deal's first); a
+bde with no entitlement to the account is denied creating one; a bde outside the deal's practice
+can't even see the deal (`not_found`, the same RLS-invisibility precedent `changeStage`/
+`logActivity` already established, not a new `denied` shape); linking a contact from a different
+(but visible) account is rejected with a clean `contact_wrong_account` code rather than a raw
+exception from the trigger; and linking the same contact twice is rejected as `already_linked`.
+`contact.create`/`contact.update`/`contact.link_to_deal` were already fully scaffolded in
+`src/auth/permissions.ts` from early on (the same "scaffolded early, unused" situation M5.4 found
+for `analytics.view_practice`) but had no dedicated per-action scope test until now - new
+`tests/permissions/contact-matrix.spec.ts` (21 tests) closes that gap. No new UI - schema and service
+layer only, per the backlog's own split from M5.6 ("Contact management on the deal").
