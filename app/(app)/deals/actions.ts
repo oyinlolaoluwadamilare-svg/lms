@@ -27,7 +27,9 @@ export async function changeStageAction(dealId: string, toStageId: string): Prom
     case "same_stage":
       return { ok: false, message: "That deal is already in this stage." };
     case "target_is_closing_stage":
-      return { ok: false, message: "Moving a deal to a won/lost stage isn't available yet - use Mark Won or Mark Lost when they land." };
+      // M5.3: Mark Won/Mark Lost (app/(app)/deals/[id]/MarkWonModal.tsx, MarkLostModal.tsx) are the
+      // only door into a won/lost stage - dragging a deal there is refused, not merely deferred.
+      return { ok: false, message: "Dragging a deal to a won/lost stage isn't supported - use Mark Won or Mark Lost instead." };
     case "not_found":
       return { ok: false, message: "That deal or stage could not be found." };
   }

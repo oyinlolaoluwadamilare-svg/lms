@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Actor } from "@/auth/permissions";
 import {
   insertOutcomeReason,
+  listActiveOutcomeReasonsByType,
   listOutcomeReasons,
   setOutcomeReasonActive,
   type OutcomeReason,
@@ -14,12 +15,12 @@ import { writeAudit } from "@/services/audit";
 export type { OutcomeReason, OutcomeType };
 
 // M5.1 (docs/07-build-backlog.md): "`outcome_reasons` admin configuration." migration 0016's own
-// RLS already scopes outcome_reasons_select tenant-wide (any role can read the picklist - M5.3's
-// Mark Won/Lost dialogs will need that), but this ADMIN screen is narrower than what RLS alone
-// would allow: only tenant_admin may reach it at all, checked here explicitly via can() rather
-// than relying on the route's own checkRouteAccess gate (CLAUDE.md #1 - UI hiding is never the
-// sole control, and a service is never "trusted" merely because only one route happens to call it
-// today).
+// RLS already scopes outcome_reasons_select tenant-wide (any role can read the picklist - exactly
+// what getActiveOutcomeReasons below, added for M5.3's Mark Won/Lost dialogs, relies on), but this
+// ADMIN screen is narrower than what RLS alone would allow: only tenant_admin may reach it at all,
+// checked here explicitly via can() rather than relying on the route's own checkRouteAccess gate
+// (CLAUDE.md #1 - UI hiding is never the sole control, and a service is never "trusted" merely
+// because only one route happens to call it today).
 
 export type GetOutcomeReasonsResult = { ok: true; reasons: OutcomeReason[] } | { ok: false; code: "denied" };
 
@@ -27,6 +28,16 @@ export async function getOutcomeReasons(supabase: SupabaseClient, actor: Actor):
   if (!can(actor, "admin.manage_outcome_reasons")) return { ok: false, code: "denied" };
   const reasons = await listOutcomeReasons(supabase, actor.tenantId);
   return { ok: true, reasons };
+}
+
+// For the Mark Won/Mark Lost dialogs (M5.3) - no can() gate, unlike getOutcomeReasons above: this is
+// a plain tenant-wide read migration 0016's own outcome_reasons_select RLS policy already allows
+// every role, the same "RLS alone is the whole authorisation boundary for this read" reasoning
+// listPipelineDeals/getDealDetail already rely on elsewhere in src/services/deals.ts. The admin
+// screen's own narrower can() gate is specific to the ADMIN action of managing the picklist, not to
+// reading it - a bde picking a reason to close their own deal is a completely different action.
+export async function getActiveOutcomeReasons(supabase: SupabaseClient, tenantId: string, type: OutcomeType): Promise<OutcomeReason[]> {
+  return listActiveOutcomeReasonsByType(supabase, tenantId, type);
 }
 
 export type CreateOutcomeReasonResult = { ok: true; reason: OutcomeReason } | { ok: false; code: "denied" };

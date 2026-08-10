@@ -34,8 +34,8 @@ function toDomain(row: OutcomeReasonRow): OutcomeReason {
 }
 
 // For the admin config screen (M5.1) - every reason, active and inactive alike (an admin managing
-// the picklist needs to see and reactivate a retired one, unlike a Mark Won/Lost picker, which
-// M5.3 will scope to active-only when it's actually built).
+// the picklist needs to see and reactivate a retired one, unlike a Mark Won/Lost picker
+// (listActiveOutcomeReasonsByType, M5.3), which is scoped to active-only).
 export async function listOutcomeReasons(supabase: SupabaseClient, tenantId: string): Promise<OutcomeReason[]> {
   const { data, error } = await supabase
     .from("outcome_reasons")
@@ -45,6 +45,28 @@ export async function listOutcomeReasons(supabase: SupabaseClient, tenantId: str
     .order("sort_order");
 
   if (error) throw new Error(`listOutcomeReasons failed: ${error.message}`);
+  return (data as OutcomeReasonRow[]).map(toDomain);
+}
+
+// For the Mark Won/Mark Lost dialogs (M5.3) - the picker only ever offers reasons a tenant_admin
+// currently has switched on, of the one type relevant to the dialog the actor opened. Unlike
+// listOutcomeReasons (the admin screen's own read, which deliberately shows inactive reasons so a
+// retired one can be reactivated), a deal-closer has no reason to see, let alone pick, a reason
+// nobody currently wants used.
+export async function listActiveOutcomeReasonsByType(
+  supabase: SupabaseClient,
+  tenantId: string,
+  type: OutcomeType,
+): Promise<OutcomeReason[]> {
+  const { data, error } = await supabase
+    .from("outcome_reasons")
+    .select(OUTCOME_REASON_COLUMNS)
+    .eq("tenant_id", tenantId)
+    .eq("type", type)
+    .eq("is_active", true)
+    .order("sort_order");
+
+  if (error) throw new Error(`listActiveOutcomeReasonsByType failed: ${error.message}`);
   return (data as OutcomeReasonRow[]).map(toDomain);
 }
 

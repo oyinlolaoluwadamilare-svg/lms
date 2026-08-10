@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getSessionActor } from "@/services/actor";
-import { createOutcomeReason, getOutcomeReasons, setOutcomeReasonActiveStatus } from "@/services/outcomeReasons";
+import { createOutcomeReason, getActiveOutcomeReasons, getOutcomeReasons, setOutcomeReasonActiveStatus } from "@/services/outcomeReasons";
 import { findOrCreateByUniqueMatch, findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M5.1 exit criteria (docs/07-build-backlog.md): "`outcome_reasons` admin configuration." Proves,
@@ -125,5 +125,40 @@ describe("outcome reasons admin service, end to end against a real signed-in ses
     await expect(createOutcomeReason(client, session.actor, { type: "win", label: "Duplicate test", sortOrder: 3 })).rejects.toThrow(
       /duplicate key value violates unique constraint/,
     );
+  });
+});
+
+// M5.3 exit criteria (docs/07-build-backlog.md): "Mark Won and Mark Lost dialogs enforcing the
+// above." The dialogs' own reason picker is getActiveOutcomeReasons, not getOutcomeReasons - a
+// completely different read, with no can() gate at all (unlike the admin service above), scoped to
+// exactly one type and only active reasons. Proven here rather than assumed identical to
+// getOutcomeReasons's own tests.
+describe("getActiveOutcomeReasons - the Mark Won/Mark Lost picker's own read (M5.3)", () => {
+  it("a plain bde (no admin.manage_outcome_reasons grant) can read it, scoped to type and is_active", async () => {
+    const adminClient = await signIn("m5-1-admin@example.com");
+    const adminSession = await getSessionActor(adminClient);
+    if (adminSession.status !== "active") throw new Error("expected an active admin session");
+
+    const created = await createOutcomeReason(adminClient, adminSession.actor, {
+      type: "win",
+      label: "Inactive win reason for M5.3 test",
+      sortOrder: 5,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const deactivated = await setOutcomeReasonActiveStatus(adminClient, adminSession.actor, created.reason.id, false);
+    expect(deactivated.ok).toBe(true);
+
+    const client = await signIn("m5-1-bde@example.com");
+
+    const winReasons = await getActiveOutcomeReasons(client, ids.tenantId, "win");
+    expect(winReasons.map((r) => r.label)).toEqual(expect.arrayContaining(["Best fit"]));
+    expect(winReasons.map((r) => r.label)).not.toEqual(expect.arrayContaining(["Inactive win reason for M5.3 test"]));
+    expect(winReasons.every((r) => r.isActive)).toBe(true);
+    expect(winReasons.every((r) => r.type === "win")).toBe(true);
+
+    const lossReasons = await getActiveOutcomeReasons(client, ids.tenantId, "loss");
+    expect(lossReasons.map((r) => r.label)).toEqual(expect.arrayContaining(["Lost to competitor"]));
+    expect(lossReasons.every((r) => r.type === "loss")).toBe(true);
   });
 });

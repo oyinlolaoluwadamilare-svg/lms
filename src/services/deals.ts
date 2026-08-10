@@ -365,6 +365,40 @@ export async function closeDeal(
   return { ok: true };
 }
 
+export interface CloseDealAvailability {
+  canMarkWon: boolean;
+  canMarkLost: boolean;
+}
+
+// For the deal detail page (M5.3) to decide whether to render the Mark Won/Mark Lost buttons at
+// all - the same canLogActivity/canRetractActivity shape src/services/activities.ts already
+// established (compute once per deal, boolean-gated visibility, false rather than an error for a
+// deal that doesn't exist or isn't visible to this actor). Mirrors closeDeal's own "already_closed"
+// guard - a won/lost deal offers neither button, since closeDeal would reject both anyway - but
+// deliberately does NOT restrict this to status === "active" only: an on_hold deal is not yet
+// closed either, and closeDeal's own pre-check (deal.status === "won" || "lost") already treats
+// on_hold the same as active, so the buttons' visibility must match what the service underneath
+// actually allows, not a narrower guess.
+export async function getCloseDealAvailability(supabase: SupabaseClient, actor: Actor, dealId: string): Promise<CloseDealAvailability> {
+  const deal = await getDealForAuthorization(supabase, dealId);
+  if (!deal || deal.status === "won" || deal.status === "lost") {
+    return { canMarkWon: false, canMarkLost: false };
+  }
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  const resource = {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  };
+  return {
+    canMarkWon: can(actor, "deal.mark_won", resource),
+    canMarkLost: can(actor, "deal.mark_lost", resource),
+  };
+}
+
 // Passthrough so app/(app)/deals/[id]/page.tsx doesn't import src/data directly. No separate can()
 // check here, same reasoning as listPipelineDeals: migration 0005's deals_select RLS policy is
 // this read's authorisation boundary, and getDealDetail already reads through the caller's own

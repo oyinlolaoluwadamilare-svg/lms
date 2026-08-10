@@ -3,9 +3,10 @@ import { formatMoney } from "@/domain/money";
 import { ACTIVITY_TYPE_LABELS } from "@/domain/activity";
 import { formatLastEngaged, stalenessBand, type StalenessBand } from "@/domain/deal";
 import { formatDateInTimezone, formatDurationSeconds, formatPlainDate } from "@/lib/dates";
-import { getDealDetail, getDealForEditView } from "@/services/deals";
+import { getCloseDealAvailability, getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
 import { canLogActivity, canRetractActivity } from "@/services/activities";
+import { getActiveOutcomeReasons } from "@/services/outcomeReasons";
 import { getEngagementTimeline, type TimelineFilters as TimelineFilterValues } from "@/services/engagementTimeline";
 import { getAddTaskContext } from "@/services/tasks";
 import { createClient } from "@/lib/supabase/server";
@@ -16,6 +17,8 @@ import { AddTaskModal } from "./AddTaskModal";
 import { AttachmentLink } from "./AttachmentLink";
 import { EditActivityModal } from "./EditActivityModal";
 import { LogActivityModal } from "./LogActivityModal";
+import { MarkLostModal } from "./MarkLostModal";
+import { MarkWonModal } from "./MarkWonModal";
 import { NextActionStrip } from "./NextActionStrip";
 import { RetractActivityModal } from "./RetractActivityModal";
 import { TimelineFilters } from "./TimelineFilters";
@@ -61,13 +64,16 @@ export default async function DealDetailPage({
   // engagement timeline reads through the same session (activities_select/stage_events_select) -
   // if the deal itself is invisible to this actor, this comes back empty rather than erroring,
   // which the early return below makes moot anyway.
-  const [deal, editView, timeline, canLog, canRetract, addTaskContext] = await Promise.all([
+  const [deal, editView, timeline, canLog, canRetract, addTaskContext, closeAvailability, winReasons, lossReasons] = await Promise.all([
     getDealDetail(supabase, id, timezone),
     session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
     getEngagementTimeline(supabase, id, timelineFilters),
     session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
     session.status === "active" ? canRetractActivity(supabase, session.actor, id) : false,
     session.status === "active" ? getAddTaskContext(supabase, session.actor, id) : { canAddTask: false, assignableUsers: [] },
+    session.status === "active" ? getCloseDealAvailability(supabase, session.actor, id) : { canMarkWon: false, canMarkLost: false },
+    session.status === "active" ? getActiveOutcomeReasons(supabase, session.actor.tenantId, "win") : [],
+    session.status === "active" ? getActiveOutcomeReasons(supabase, session.actor.tenantId, "loss") : [],
   ]);
   const currentActorId = session.status === "active" ? session.actor.id : null;
 
@@ -120,6 +126,14 @@ export default async function DealDetailPage({
                 Edit deal
               </Link>
             ) : null}
+            {closeAvailability.canMarkWon ? (
+              // editView is always non-null here: canMarkWon can only be true when the session is
+              // active and this deal exists (getCloseDealAvailability's own not-found/status guard),
+              // and getDealForEditView returns null only when the deal itself doesn't exist - the
+              // "NGN" fallback is unreachable, kept only so this isn't a silent non-null assertion.
+              <MarkWonModal dealId={deal.id} timezone={timezone} currencyCode={editView?.currencyCode ?? "NGN"} reasons={winReasons} />
+            ) : null}
+            {closeAvailability.canMarkLost ? <MarkLostModal dealId={deal.id} timezone={timezone} reasons={lossReasons} /> : null}
           </div>
         </div>
         <p className="text-sm text-muted">{deal.account.name}</p>
@@ -130,9 +144,13 @@ export default async function DealDetailPage({
           (stakeholders: M5.5's contacts; the "Open tasks" inline list with per-row inline complete:
           M4.5, the same milestone that builds My Work's own inline-complete interaction this list
           would otherwise duplicate ahead of time). Log Activity (M3.4), Add Task (M4.3), the
-          next-action strip (M4.4), Edit Deal (M1.7) and the last-engaged chip (M3.7) are what now
-          exist; Advance Stage, Mark Won/Lost, Escalate and Add Contact are still missing (M2.2's
-          board drag already moves stage; the rest is M5+). The engagement timeline below (M3.5/M3.6)
+          next-action strip (M4.4), Edit Deal (M1.7), Mark Won/Lost (M5.3) and the last-engaged chip
+          (M3.7) are what now exist; Advance Stage, Escalate and Add Contact are still missing
+          (M2.2's board drag already moves stage; the rest is M5+). Mark Won/Lost renders as two
+          plain buttons, not "under a menu" the way docs/06-ui-spec.md's own line names it - Escalate
+          and Add Contact don't exist yet either, and this codebase has no dropdown-menu primitive;
+          building one for two buttons ahead of a third and fourth actually needing it would be
+          premature abstraction (CLAUDE.md #6). The engagement timeline below (M3.5/M3.6)
           supersedes M2.4's narrower stage-history-only panel, merging it with the activities this
           modal writes - see its own section comment for what of the full spec is still deliberately
           missing (attributed contacts). Otherwise this is the same read-only skeleton

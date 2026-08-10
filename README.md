@@ -1772,6 +1772,79 @@ manual browser QA of the outcome-reasons admin checkbox, all green. The Playwrig
 re-run - no UI this milestone touches has e2e coverage today, and no existing e2e path exercises the
 outcome-reasons admin screen or any deal-closing flow.
 
+**M5.3** ("Mark Won and Mark Lost dialogs enforcing the above.") builds the first UI for M5.1/M5.2's
+rules - the only way a deal reaches won or lost through this app now that a UI actually exists for
+it, `src/services/deals.ts`'s `closeDeal` underneath.
+
+Two new service functions back the dialogs: `getActiveOutcomeReasons` (`src/services/
+outcomeReasons.ts`) - unlike the M5.1 admin screen's own `getOutcomeReasons`, this has no
+`admin.manage_outcome_reasons` gate at all, since migration 0016's own `outcome_reasons_select` RLS
+policy already makes reading the picklist a plain tenant-wide read, the same "RLS alone is the whole
+authorisation boundary" reasoning `listPipelineDeals`/`getDealDetail` already rely on - scoped to
+active-only and one type (`win`/`loss`), backed by a new `listActiveOutcomeReasonsByType` in
+`src/data/outcomeReasons.ts`; and `getCloseDealAvailability` (`src/services/deals.ts`), the same
+`canLogActivity`/`canRetractActivity` shape `src/services/activities.ts` already established -
+computed once per deal, gating the two buttons' visibility on both `deal.mark_won`/`deal.mark_lost`
+and the deal not already being won or lost (mirroring `closeDeal`'s own `already_closed` guard,
+deliberately not narrowed to `status === "active"` only - an `on_hold` deal is closeable too, exactly
+as `closeDeal` itself already treats it).
+
+`docs/06-ui-spec.md`'s only text on this ("under a menu: Mark Won, Mark Lost, Escalate, Add Contact")
+was deliberately not followed literally: Escalate and Add Contact don't exist yet either, and this
+codebase has no dropdown-menu primitive anywhere - building one for two buttons ahead of a third and
+fourth action actually needing it would be premature abstraction (CLAUDE.md #6). `MarkWonModal.tsx`
+and `MarkLostModal.tsx` (`app/(app)/deals/[id]/`) instead render as two plain trigger buttons next to
+Edit deal, following the exact native-`<dialog>` modal convention `LogActivityModal`/`AddTaskModal`
+already established (per-instance `useId`, autofocus on open, Ctrl/Cmd+Enter to save, Escape to
+close) rather than inventing a new one. Money input follows the edit-deal form's own established
+three-step pattern (`src/domain/money.ts`'s `toMinorUnits`/`toMajorUnitsString`, an optional
+regex-validated string field, converted only in the server action) - there is no currency picker
+anywhere in this codebase, so `finalValueMinor` is always paired with the deal's own existing
+`currencyCode` (from `getDealForEditView`, already fetched by the page) rather than ever asking the
+user to choose one, which is what actually satisfies migration 0016's `final_value_needs_currency`
+check constraint (both null or both set) without inventing UI nothing asks for.
+
+`MarkLostModal`'s competitor-name field is the one genuinely dynamic piece: it only appears, and is
+only required, once the selected reason's own `requiresCompetitorName` is true - a per-reason
+runtime fact, not something a static Zod schema can express, so `markLostSchema` deliberately leaves
+`competitorName` optional and the modal enforces it client-side once a reason is picked;
+`closeDeal`'s own `competitor_name_required` result code remains the authoritative backstop either
+way. Both dialogs default their close-date field to today (the actor's own timezone,
+`dateInTimezone`) and reject a future date the same way `LogActivityModal`'s `activityDate` already
+does - not documented anywhere, but the same inferred default as an existing, precedented pattern
+rather than a genuinely new business-rule guess. An empty active-reasons list (a fresh tenant, or an
+admin who deactivated every reason of one type) is a designed state, not an unhandled edge case: the
+picker is replaced with a message naming the gap, and the submit button is disabled, since "closing
+is impossible without a reason" makes there nothing useful to submit.
+
+`app/(app)/deals/actions.ts`'s `changeStageAction` had a placeholder message from M2.2 predating this
+milestone ("isn't available yet - use Mark Won or Mark Lost when they land"); updated now that they
+exist, to state plainly that dragging to a won/lost stage isn't supported at all, not merely
+deferred.
+
+New `tests/integration/outcome-reasons.spec.ts` coverage (1 new test, against the real hosted
+project) proves `getActiveOutcomeReasons` end to end: a plain bde with no admin grant can read it,
+correctly scoped to one type and to `is_active = true`, excluding a reason an admin just deactivated.
+`getCloseDealAvailability` gained no dedicated test of its own - the same precedent
+`canLogActivity`/`canRetractActivity` already set, since it composes two already-exhaustively-tested
+things (`can()`'s own matrix tests, `closeDeal`'s own already-closed guard) rather than adding new
+logic of its own.
+
+Both dialogs were driven end to end in a real browser against the real hosted project rather than
+only unit/integration-tested: signed in as a bde, Mark Won on one deal (reason picker populated,
+final value "1200000.50" converted and paired with the deal's currency, dialog closed on success) and
+Mark Lost on another (submitting with no detail produced the inline error without a server round
+trip, selecting a competitor-required reason made the competitor-name field appear and become
+required, submitting with it produced the correct final state) - verified both by the dialogs'
+own behaviour and directly against the database (`deal_outcomes.final_value_minor` exactly
+120000050, `currency_code` `NGN`, `reason_detail`/`competitor_name` recorded correctly on the loss),
+then confirmed on a fresh full page load that both buttons correctly disappear once a deal is closed
+and the header/details sections show the final Won/Lost state.
+
+Verified: typecheck, lint, unit (298, unchanged), RLS (263, unchanged - no new migration this
+milestone), integration (145, 1 new), and full manual browser QA of both dialogs against the real
+hosted project, all green.
+
 ## Commands
 
 ```
