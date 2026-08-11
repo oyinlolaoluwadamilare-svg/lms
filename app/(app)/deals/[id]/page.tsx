@@ -7,12 +7,15 @@ import { getCloseDealAvailability, getDealDetail, getDealForEditView } from "@/s
 import { getSessionActor } from "@/services/actor";
 import { canLogActivity, canRetractActivity } from "@/services/activities";
 import { getActiveOutcomeReasons } from "@/services/outcomeReasons";
+import { getDealContactsSection } from "@/services/contacts";
+import { DECISION_ROLE_LABELS } from "@/domain/contact";
 import { getEngagementTimeline, type TimelineFilters as TimelineFilterValues } from "@/services/engagementTimeline";
 import { getAddTaskContext } from "@/services/tasks";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
+import { AddContactModal } from "./AddContactModal";
 import { AddTaskModal } from "./AddTaskModal";
 import { AttachmentLink } from "./AttachmentLink";
 import { EditActivityModal } from "./EditActivityModal";
@@ -81,6 +84,14 @@ export default async function DealDetailPage({
     return <EmptyState title="Deal not found" description="It may not exist, or isn't visible to your role." />;
   }
 
+  // Depends on deal.stage.sortOrder (getDealContactsSection's currentStageSortOrder parameter -
+  // src/services/contacts.ts), which isn't known until the deal itself has been fetched above, so
+  // this can't join the Promise.all block those fetches share.
+  const contactsSection =
+    session.status === "active"
+      ? await getDealContactsSection(supabase, session.actor, id, deal.stage.sortOrder)
+      : { canAddContact: false, contacts: [], showSingleThreadingWarning: false, availableContacts: [] };
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-2 rounded-token border border-line bg-raised p-6">
@@ -134,26 +145,28 @@ export default async function DealDetailPage({
               <MarkWonModal dealId={deal.id} timezone={timezone} currencyCode={editView?.currencyCode ?? "NGN"} reasons={winReasons} />
             ) : null}
             {closeAvailability.canMarkLost ? <MarkLostModal dealId={deal.id} timezone={timezone} reasons={lossReasons} /> : null}
+            {contactsSection.canAddContact ? (
+              <AddContactModal dealId={deal.id} accountId={deal.account.id} availableContacts={contactsSection.availableContacts} />
+            ) : null}
           </div>
         </div>
         <p className="text-sm text-muted">{deal.account.name}</p>
       </header>
 
-      {/* Deliberately no stakeholders or open-tasks list here - docs/06-ui-spec.md's full Deal
-          detail spec includes both, but each depends on an entity that doesn't exist yet
-          (stakeholders: M5.5's contacts; the "Open tasks" inline list with per-row inline complete:
-          M4.5, the same milestone that builds My Work's own inline-complete interaction this list
-          would otherwise duplicate ahead of time). Log Activity (M3.4), Add Task (M4.3), the
-          next-action strip (M4.4), Edit Deal (M1.7), Mark Won/Lost (M5.3) and the last-engaged chip
-          (M3.7) are what now exist; Advance Stage, Escalate and Add Contact are still missing
-          (M2.2's board drag already moves stage; the rest is M5+). Mark Won/Lost renders as two
-          plain buttons, not "under a menu" the way docs/06-ui-spec.md's own line names it - Escalate
-          and Add Contact don't exist yet either, and this codebase has no dropdown-menu primitive;
-          building one for two buttons ahead of a third and fourth actually needing it would be
-          premature abstraction (CLAUDE.md #6). The engagement timeline below (M3.5/M3.6)
+      {/* Deliberately no open-tasks list here - docs/06-ui-spec.md's full Deal detail spec includes
+          an inline "Open tasks" list with per-row inline complete, which depends on M4.5 (the same
+          milestone that builds My Work's own inline-complete interaction this list would otherwise
+          duplicate ahead of time). Log Activity (M3.4), Add Task (M4.3), the next-action strip
+          (M4.4), Edit Deal (M1.7), Mark Won/Lost (M5.3), the last-engaged chip (M3.7) and
+          Stakeholders/Add Contact (M5.6) are what now exist; Advance Stage and Escalate are still
+          missing (M2.2's board drag already moves stage; Escalate is M5+). Mark Won/Lost/Add
+          Contact render as plain buttons, not "under a menu" the way docs/06-ui-spec.md's own line
+          names it - Escalate doesn't exist yet either, and this codebase has no dropdown-menu
+          primitive; building one for a handful of buttons ahead of Escalate actually needing it
+          would be premature abstraction (CLAUDE.md #6). The engagement timeline below (M3.5/M3.6)
           supersedes M2.4's narrower stage-history-only panel, merging it with the activities this
           modal writes - see its own section comment for what of the full spec is still deliberately
-          missing (attributed contacts). Otherwise this is the same read-only skeleton
+          missing (attributed contacts, M5.7). Otherwise this is the same read-only skeleton
           docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
@@ -216,11 +229,57 @@ export default async function DealDetailPage({
         </section>
       </div>
 
+      {/* M5.6 (docs/07-build-backlog.md): "Contact management on the deal with decision-role
+          badges; single-threading warning past Discovery." Add-only for now (docs/DECISIONS.md's
+          D-14) - contact cards are read-only display, no edit/remove action, matching
+          migration 0018's own insert-only deal_contacts schema. lastEngagedAt is always null today
+          (migration 0018's own column comment: "no write path yet", M5.7) so every card renders
+          "Never engaged" until that milestone wires up the real derivation - a known, disclosed gap,
+          not a bug. showSingleThreadingWarning uses isPastFirstOpenStage's own ⚠ unconfirmed default
+          for what "past Discovery" means (src/domain/deal.ts's own comment, docs/DECISIONS.md's
+          D-13) - confirm or replace with the product owner before relying on it. */}
+      <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
+        <h2 className="text-sm font-semibold text-ink">Stakeholders</h2>
+
+        {contactsSection.showSingleThreadingWarning ? (
+          <p role="alert" className="rounded-token border border-risk bg-risk/10 px-3 py-2 text-sm text-risk">
+            Single-threaded: fewer than two contacts are engaged on this deal.
+          </p>
+        ) : null}
+
+        {contactsSection.contacts.length === 0 ? (
+          <p className="text-sm text-muted">No contacts linked yet.</p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {contactsSection.contacts.map((contact) => (
+              <li
+                key={contact.contactId}
+                className="flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2 text-sm first:border-t-0 first:pt-0"
+              >
+                <div>
+                  <p className="text-ink">
+                    {contact.firstName} {contact.lastName ?? ""}
+                    {contact.isPrimary ? (
+                      <span className="ml-2 rounded-token bg-accent px-1.5 py-0.5 text-xs font-medium text-surface">Primary</span>
+                    ) : null}
+                    <span className="ml-2 rounded-token bg-raised px-1.5 py-0.5 text-xs font-medium text-muted">
+                      {DECISION_ROLE_LABELS[contact.decisionRole]}
+                    </span>
+                  </p>
+                  <p className="text-xs text-muted">{contact.jobTitle ?? "—"}</p>
+                </div>
+                <p className="text-xs text-muted">{contact.lastEngagedAt ? formatDateInTimezone(contact.lastEngagedAt, timezone) : "Never engaged"}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
       {/* M3.5/M3.6 (docs/07-build-backlog.md): "Engagement timeline component merging activities
           and stage events, newest first, with type and author filters and a designed empty state
           ... edited marker with revision history ... retracted entries appear struck through with
           the reason, never removed." Still narrower than docs/06-ui-spec.md's full description in
-          one way, because its dependency doesn't exist yet: no "attributed contacts" (M5.5). "Type
+          one way, because its dependency doesn't exist yet: no "attributed contacts" (M5.7). "Type
           icon" is a text label - no icon system exists in this codebase yet. */}
       <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">

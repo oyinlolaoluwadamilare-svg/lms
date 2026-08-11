@@ -41,6 +41,36 @@ replace it with the product owner before this report is relied on for any real d
 update `docs/04-metric-definitions.md`'s own entry to match whatever is decided, the same way
 `tenants.reporting_currency`'s D-08b note tracks its own still-open half.
 
+### D-13 — What does "past Discovery" mean for the single-threading warning, for a tenant whose own stage list has no stage literally named "Discovery"?
+**Blocks:** `docs/06-ui-spec.md`'s Stakeholders section and M5.6's single-threading warning, which
+ships against a flagged, unconfirmed default rather than this question being resolved first.
+**Status:** "Discovery" names no reserved stage code or structural concept anywhere in
+`docs/01-domain-model.md` - `pipeline_stages` are fully tenant-configurable (migration 0005), and
+the name traces back to the external benchmark PRD's own illustrative "Discovery Call" example
+stage, not a rule this codebase's own docs otherwise define. Asked directly (past the first open
+stage, a literal name/code match, or a custom rule) and not yet answered; per this file's own header
+rule this should have blocked work, and did not, for the same reason D-12 didn't. **"Past the first
+open stage" (the deal's current `sort_order` strictly greater than the tenant's own earliest
+open-type stage) is live today** - `src/domain/deal.ts`'s `isPastFirstOpenStage`/
+`showsSingleThreadingWarning`. Confirm or replace with the product owner before this warning is
+relied on for anything, and update that function's own comment and this entry together if it
+changes.
+
+### D-14 — Should a linked contact's decision role or primary status be editable after M5.6 links it?
+**Blocks:** nothing yet blocked outright - M5.6 shipped add-only (matching migration 0018's own
+insert-only `deal_contacts` schema and RLS), so this is a scope question for a future milestone, not
+a defect in M5.6 itself.
+**Status:** migration 0018's own header comment explicitly named M5.6 "the obvious candidate" to add
+an update/reassign action if one turns out to be needed, without asserting it must be. Asked
+directly (ship add-only vs. build editing now, with a new permission action and an RLS migration)
+and not yet answered. Per this session's standing precedent, add-only was adopted as the default,
+since it is also what `docs/06-ui-spec.md`'s own Stakeholders text most directly supports (decision-
+role badges and the primary flag are described with display nouns, no verb implying editability).
+**If a future milestone needs to let a user change a decision role or reassign primary, it will need
+a new permission action (e.g. `contact.update_deal_role`/`deal.reassign_primary_contact`), a
+docs/02-permission-matrix.md update, and a migration adding UPDATE policies to `deal_contacts`** -
+none of that exists today.
+
 ---
 
 ## Part B — Decisions made

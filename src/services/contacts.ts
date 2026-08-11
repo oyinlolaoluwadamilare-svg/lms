@@ -1,14 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Action, type Actor } from "@/auth/permissions";
 import { listPracticeLineIdsForAccount } from "@/data/accounts";
-import { getContactForAuthorization, insertContact, type Contact } from "@/data/contacts";
+import { getContactForAuthorization, insertContact, listActiveContactsForAccount, type Contact } from "@/data/contacts";
+import { countContactsForDeal, DealContactAlreadyLinkedError, insertDealContact, listDealContactsForDeal, type DealContactRow } from "@/data/dealContacts";
 // Re-exported so app/(app) only needs to import from this module - app may not import src/data
 // directly (eslint.config.mjs boundaries), including for types.
-export type { Contact };
-import { countContactsForDeal, DealContactAlreadyLinkedError, insertDealContact } from "@/data/dealContacts";
+export type { Contact, DealContactRow };
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import { getDealForAuthorization } from "@/data/deals";
+import { listOpenStages } from "@/data/pipelineStages";
 import { writeAudit } from "@/services/audit";
+import { showsSingleThreadingWarning } from "@/domain/deal";
 import type { DecisionRole } from "@/domain/contact";
 
 // M5.5 (docs/07-build-backlog.md): "`contacts`, `deal_contacts` migrations; primary-contact
@@ -134,4 +136,59 @@ export async function linkContactToDeal(
   });
 
   return { ok: true, isPrimary };
+}
+
+export interface DealContactsSection {
+  canAddContact: boolean;
+  contacts: DealContactRow[];
+  showSingleThreadingWarning: boolean;
+  // Active contacts at the deal's own account not yet linked to it - the Add Contact modal's "pick
+  // an existing contact" list. Always empty when canAddContact is false (not fetched at all - no
+  // point loading a picker nobody can use).
+  availableContacts: Contact[];
+}
+
+// For the deal detail page's Stakeholders section (M5.6) to render its contact cards and decide
+// whether to show the Add Contact button - one round trip, the same getAddTaskContext shape
+// src/services/tasks.ts already established (bundled with the boolean, not a separate
+// canAddContact-only call, since a caller needing one always needs the other from the same deal
+// fetch). currentStageSortOrder is the caller's own already-fetched value (getDealDetail, M1.6) -
+// not re-fetched here, since the page already has it and getDealForAuthorization doesn't carry it.
+//
+// showSingleThreadingWarning uses isPastFirstOpenStage's own ⚠ unconfirmed default (see
+// src/domain/deal.ts's own comment and docs/DECISIONS.md's D-13) - "the tenant's own earliest
+// open-type stage" is computed here via listOpenStages (already ordered by sort_order ascending),
+// falling back to currentStageSortOrder itself (making the warning never fire) in the
+// structurally-impossible case a tenant has no open stages at all, rather than crashing on an
+// empty array.
+export async function getDealContactsSection(
+  supabase: SupabaseClient,
+  actor: Actor,
+  dealId: string,
+  currentStageSortOrder: number,
+): Promise<DealContactsSection> {
+  const deal = await getDealForAuthorization(supabase, dealId);
+  if (!deal) return { canAddContact: false, contacts: [], showSingleThreadingWarning: false, availableContacts: [] };
+
+  const coOwnerIds = await listDealCoOwnerIds(supabase, dealId);
+  const canAddContact = can(actor, "contact.link_to_deal", {
+    tenantId: deal.tenantId,
+    practiceLineId: deal.practiceLineId,
+    ownerId: deal.ownerId ?? undefined,
+    authorId: deal.authorId,
+    coOwnerIds,
+  });
+
+  const [contacts, openStages, accountContacts] = await Promise.all([
+    listDealContactsForDeal(supabase, dealId),
+    listOpenStages(supabase),
+    canAddContact ? listActiveContactsForAccount(supabase, deal.accountId) : Promise.resolve([]),
+  ]);
+  const firstOpenStageSortOrder = openStages[0]?.sortOrder ?? currentStageSortOrder;
+  const showSingleThreadingWarning = showsSingleThreadingWarning(contacts.length, currentStageSortOrder, firstOpenStageSortOrder);
+
+  const linkedContactIds = new Set(contacts.map((c) => c.contactId));
+  const availableContacts = accountContacts.filter((c) => !linkedContactIds.has(c.id));
+
+  return { canAddContact, contacts, showSingleThreadingWarning, availableContacts };
 }

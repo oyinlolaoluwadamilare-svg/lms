@@ -4,7 +4,9 @@ import {
   formatDealReference,
   formatLastEngaged,
   isOpenStage,
+  isPastFirstOpenStage,
   resolveProbability,
+  showsSingleThreadingWarning,
   stalenessBand,
   valueBand,
   weightedValue,
@@ -256,5 +258,41 @@ describe("formatLastEngaged", () => {
 
   it("renders plural 'days' otherwise, matching docs/06-ui-spec.md's own example", () => {
     expect(formatLastEngaged(12)).toBe("Last engaged 12 days ago");
+  });
+});
+
+// docs/06-ui-spec.md's Stakeholders section (M5.6), against the ⚠ unconfirmed default flagged in
+// docs/DECISIONS.md's D-13: "past Discovery" == the deal's current sort_order strictly greater than
+// the tenant's own earliest open-type stage's sort_order.
+describe("isPastFirstOpenStage", () => {
+  it("is false at the first open stage itself, not just before it", () => {
+    expect(isPastFirstOpenStage(10, 10)).toBe(false);
+  });
+
+  it("is false before the first open stage", () => {
+    expect(isPastFirstOpenStage(5, 10)).toBe(false);
+  });
+
+  it("is true strictly past the first open stage", () => {
+    expect(isPastFirstOpenStage(20, 10)).toBe(true);
+  });
+});
+
+describe("showsSingleThreadingWarning", () => {
+  it("is false at the first open stage even with zero contacts - not past it yet", () => {
+    expect(showsSingleThreadingWarning(0, 10, 10)).toBe(false);
+  });
+
+  it("is true past the first open stage with zero contacts", () => {
+    expect(showsSingleThreadingWarning(0, 20, 10)).toBe(true);
+  });
+
+  it("is true past the first open stage with exactly one contact", () => {
+    expect(showsSingleThreadingWarning(1, 20, 10)).toBe(true);
+  });
+
+  it("is false past the first open stage once two or more contacts are linked", () => {
+    expect(showsSingleThreadingWarning(2, 20, 10)).toBe(false);
+    expect(showsSingleThreadingWarning(5, 20, 10)).toBe(false);
   });
 });

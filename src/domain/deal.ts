@@ -125,3 +125,23 @@ export function formatLastEngaged(daysSinceLastEngagement: number | null): strin
   if (daysSinceLastEngagement === 0) return "Last engaged today";
   return `Last engaged ${daysSinceLastEngagement} ${daysSinceLastEngagement === 1 ? "day" : "days"} ago`;
 }
+
+// docs/06-ui-spec.md's Stakeholders section (M5.6): "If fewer than two contacts and the deal is
+// past Discovery, show a single-threading warning." ⚠ UNCONFIRMED DEFAULT, not a product-owner
+// decision (see docs/DECISIONS.md's D-13) - "Discovery" names no reserved stage code or structural
+// concept anywhere in docs/01-domain-model.md; pipeline_stages are fully tenant-configurable
+// (migration 0005), and "Discovery" only ever appears in this codebase's own docs as this one
+// spec line and its restatement in docs/07-build-backlog.md - it traces back to the external
+// benchmark PRD's own illustrative "Discovery Call" example stage, not a tenant-agnostic rule. The
+// user was asked directly (past the first open stage vs. a literal name/code match vs. a custom
+// rule) and did not answer before work continued; per this session's own precedent for an
+// unanswered business-rule question, "past the first open stage" was adopted as the flagged,
+// reversible default: sortOrder strictly greater than every tenant's own earliest open-type stage,
+// which works for any tenant regardless of how stages are named, added, or reordered.
+export function isPastFirstOpenStage(currentStageSortOrder: number, firstOpenStageSortOrder: number): boolean {
+  return currentStageSortOrder > firstOpenStageSortOrder;
+}
+
+export function showsSingleThreadingWarning(contactCount: number, currentStageSortOrder: number, firstOpenStageSortOrder: number): boolean {
+  return contactCount < 2 && isPastFirstOpenStage(currentStageSortOrder, firstOpenStageSortOrder);
+}

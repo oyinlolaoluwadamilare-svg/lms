@@ -1991,6 +1991,78 @@ Verified: typecheck, lint, unit (324, 21 new), RLS (274, 11 new), integration (1
 green. No manual browser QA this milestone - there is no UI to QA (see this entry's own opening
 paragraph).
 
+**M5.6** ("Contact management on the deal with decision-role badges; single-threading warning past
+Discovery.") is the UI half M5.5 deliberately left out: a Stakeholders section on the deal detail
+page, an Add Contact modal, and the single-threading warning banner. No new migration - M5.5's
+schema, RLS and `deal_contacts`' insert-only shape already cover everything this milestone needs.
+
+**Two genuine business-rule ambiguities surfaced, asked, and went unanswered** - handled the same
+way D-12 (value bands) was in M5.4: proceed with the most-defensible default, flag it prominently in
+both the code and `docs/DECISIONS.md`, and let the product owner override it later.
+
+- **D-13 - what "past Discovery" means.** docs/06-ui-spec.md's own line ("if fewer than two contacts
+  and the deal is past Discovery, show a single-threading warning") names a stage that is not a
+  reserved concept anywhere in this codebase: `pipeline_stages` are fully tenant-configurable
+  (migration 0005), and "Discovery" traces back to the external benchmark PRD's own illustrative
+  example stage, not a rule this build's own docs define. The live default, `src/domain/deal.ts`'s
+  `isPastFirstOpenStage`: the deal's current `sort_order` strictly greater than the tenant's own
+  earliest open-type stage - correct for any tenant regardless of how its stages are named, added,
+  or reordered, but still a default, not a confirmed rule.
+- **D-14 - whether a linked contact's decision role or primary status should ever be editable.**
+  Migration 0018's own header comment named M5.6 "the obvious candidate" for that action without
+  asserting it must exist. Shipped add-only: contacts are linked with a decision role chosen at
+  link time and rendered as read-only badges afterward, matching both `deal_contacts`' own
+  insert-only schema and docs/06-ui-spec.md's own display-noun wording for this section. Editing,
+  if ever needed, is new scope - a new permission action, a permission-matrix update, and an RLS
+  migration adding UPDATE policies, none of which exist today.
+
+**The Stakeholders section and its data.** `src/services/contacts.ts`'s new `getDealContactsSection`
+bundles everything the section needs from one deal fetch, the same `getAddTaskContext`/
+`getCloseDealAvailability` shape this codebase already uses for "a boolean gate plus its supporting
+picker data" - `canAddContact`, the linked `contacts` list (primary first, then alphabetical),
+`showSingleThreadingWarning`, and `availableContacts` (active contacts at the deal's own account not
+yet linked to it, only fetched at all when `canAddContact` is true - no point loading a picker
+nobody can use). `currentStageSortOrder` is a parameter, not something this function fetches itself:
+the deal detail page already has it from its own `getDealDetail` call, and `getDealForAuthorization`
+doesn't carry it, so a caller passes its own already-fetched value in rather than paying for a second
+stage lookup. `contacts.last_engaged_at` renders as "Never engaged" for every contact today - it has
+no write path yet (migration 0018's own column comment; M5.7 wires up the real derivation) - a known,
+disclosed gap, not a bug.
+
+**The Add Contact modal** offers two modes: pick an existing account contact (hidden entirely when
+there are none to pick, so the form opens straight into "new contact" mode instead of showing an
+empty picker), or create one inline - both end at the same `decisionRole` select, sourced from
+`DECISION_ROLES`/`DECISION_ROLE_LABELS` in `src/domain/contact.ts` (a direct `app` -> `domain` import,
+the same allowed path `LogActivityModal.tsx` already established for activity types - the eslint
+layering boundary restricts `app` from importing `src/data` directly, not `src/domain`). The new
+`addContactToDealAction` server action chains `createContact` then `linkContactToDeal` for "new
+contact" mode (just `linkContactToDeal` for "existing contact"); if the first call succeeds and the
+second then fails, the newly-created contact is left in place, unlinked - a disclosed
+non-atomicity gap, the same tier most compound writes in this codebase accept rather than reaching
+for a security-definer RPC (M5.2's `closeDeal`) every time.
+
+New `tests/unit/deal.spec.ts` coverage (7 new tests) proves `isPastFirstOpenStage`/
+`showsSingleThreadingWarning` at their boundaries: false exactly at the first open stage regardless
+of contact count, true once past it with fewer than two contacts, false again at exactly two. New
+tests in `tests/integration/contacts.spec.ts` (3 new, against the real hosted project, real
+signed-in sessions) prove `getDealContactsSection` end to end, using a fixture deal kept separate
+from M5.5's own so the warning tests can start from zero linked contacts: `canAddContact`/
+`availableContacts` for an entitled bde, the warning false at the first open stage with zero
+contacts, and the warning appearing past it with one contact and clearing once a second is linked.
+No new RLS tests - no new migration.
+
+Manual browser QA against the real hosted project (a QA-only second open stage and two QA-only deals
+seeded, then removed afterward) confirmed: the warning banner renders past the first open stage with
+zero contacts and is correctly absent at the first open stage itself; the Add Contact modal's
+existing/new mode toggle, decision-role select and save flow all work end to end (linking an existing
+contact made it primary and appeared as a badge-annotated card with "Never engaged"); and a bde
+outside the deal's practice sees "Deal not found" rather than the page at all, consistent with the
+existing RLS-invisibility precedent.
+
+Verified: typecheck, lint, unit (331, 7 new), RLS (274, unchanged - no new migration this milestone),
+integration (158, 3 new), and manual browser QA of the Stakeholders section and Add Contact modal
+against the real hosted project, all green.
+
 ## Commands
 
 ```

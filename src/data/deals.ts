@@ -463,7 +463,7 @@ export interface DealDetail {
   weightedValue: Money | null;
   proposalValue: Money | null;
   negotiatedValue: Money | null;
-  stage: { id: string; name: string; stageType: StageType };
+  stage: { id: string; name: string; stageType: StageType; sortOrder: number };
   account: { id: string; name: string; industry: string | null; region: string | null };
   practiceLineName: string;
   ownerName: string | null;
@@ -495,7 +495,7 @@ interface DealDetailRow {
   last_engaged_at: string | null;
   accounts: { id: string; name: string; industry: string | null; region: string | null } | null;
   practice_lines: { name: string } | null;
-  pipeline_stages: { id: string; name: string; stage_type: StageType; probability_threshold: number } | null;
+  pipeline_stages: { id: string; name: string; stage_type: StageType; probability_threshold: number; sort_order: number } | null;
   owner: { full_name: string } | null;
   author: { full_name: string } | null;
   deal_co_owners: Array<{ user: { full_name: string } | null }>;
@@ -524,7 +524,7 @@ export async function getDealDetail(
         "forecast_category, proposal_value_minor::text, negotiated_value_minor::text, currency_code, " +
         "probability_override, created_at, updated_at, last_engaged_at, " +
         "accounts(id, name, industry, region), practice_lines(name), " +
-        "pipeline_stages(id, name, stage_type, probability_threshold), " +
+        "pipeline_stages(id, name, stage_type, probability_threshold, sort_order), " +
         "owner:users!owner_id(full_name), author:users!author_id(full_name), " +
         "deal_co_owners(user:users!user_id(full_name)), " +
         "next_action:tasks!next_action_task_id(id, title, due_date, priority)",
@@ -575,7 +575,12 @@ export async function getDealDetail(
       dealForCalc.proposalValueMinor === null ? null : { amountMinor: dealForCalc.proposalValueMinor, currency: row.currency_code },
     negotiatedValue:
       dealForCalc.negotiatedValueMinor === null ? null : { amountMinor: dealForCalc.negotiatedValueMinor, currency: row.currency_code },
-    stage: { id: row.pipeline_stages.id, name: row.pipeline_stages.name, stageType: row.pipeline_stages.stage_type },
+    stage: {
+      id: row.pipeline_stages.id,
+      name: row.pipeline_stages.name,
+      stageType: row.pipeline_stages.stage_type,
+      sortOrder: row.pipeline_stages.sort_order,
+    },
     account: {
       id: row.accounts.id,
       name: row.accounts.name,

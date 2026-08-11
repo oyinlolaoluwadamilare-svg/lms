@@ -10,6 +10,7 @@ export interface Contact {
   phone: string | null;
   linkedinUrl: string | null;
   isActive: boolean;
+  lastEngagedAt: string | null;
 }
 
 interface ContactRow {
@@ -22,9 +23,10 @@ interface ContactRow {
   phone: string | null;
   linkedin_url: string | null;
   is_active: boolean;
+  last_engaged_at: string | null;
 }
 
-const CONTACT_COLUMNS = "id, account_id, first_name, last_name, job_title, email, phone, linkedin_url, is_active";
+const CONTACT_COLUMNS = "id, account_id, first_name, last_name, job_title, email, phone, linkedin_url, is_active, last_engaged_at";
 
 function toDomain(row: ContactRow): Contact {
   return {
@@ -37,6 +39,11 @@ function toDomain(row: ContactRow): Contact {
     phone: row.phone,
     linkedinUrl: row.linkedin_url,
     isActive: row.is_active,
+    // Always null today - migration 0018's own column comment: "no write path yet (M5.7:
+    // 'contact-level last-engaged')." Exposed anyway (M5.6's Stakeholders card shows it as "Never
+    // engaged" for every contact until M5.7 wires up the real derivation), the same narrower-than-
+    // spec-because-its-dependency-doesn't-exist-yet shape this session already uses everywhere.
+    lastEngagedAt: row.last_engaged_at,
   };
 }
 
@@ -75,6 +82,23 @@ export async function insertContact(supabase: SupabaseClient, input: NewContactI
 
   if (error) throw new Error(`insertContact failed: ${error.message}`);
   return toDomain(data as ContactRow);
+}
+
+// For the Add Contact modal's "pick an existing contact" list (M5.6) - every active contact at the
+// deal's own account, not just the ones already linked to this particular deal (the caller,
+// getDealContactsSection, filters those out in application code once it has both lists, rather than
+// this function needing to know about deal_contacts at all).
+export async function listActiveContactsForAccount(supabase: SupabaseClient, accountId: string): Promise<Contact[]> {
+  const { data, error } = await supabase
+    .from("contacts")
+    .select(CONTACT_COLUMNS)
+    .eq("account_id", accountId)
+    .eq("is_active", true)
+    .is("deleted_at", null)
+    .order("first_name");
+
+  if (error) throw new Error(`listActiveContactsForAccount failed: ${error.message}`);
+  return (data as ContactRow[]).map(toDomain);
 }
 
 export interface ContactForAuthorization {

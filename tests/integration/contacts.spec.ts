@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/service";
 import { getSessionActor } from "@/services/actor";
-import { createContact, linkContactToDeal } from "@/services/contacts";
+import { createContact, getDealContactsSection, linkContactToDeal } from "@/services/contacts";
 import { findOrCreateByUniqueMatch, findOrCreateTenant, findOrCreateUser, signIn as signInAs } from "./support/permanentFixture";
 
 // M5.5 exit criteria (docs/07-build-backlog.md): "`contacts`, `deal_contacts` migrations;
@@ -33,6 +33,7 @@ const ids = {
   bdeAuthId: "",
   otherPracticeBdeAuthId: "",
   dealId: "",
+  secondDealId: "",
 };
 
 function signIn(email: string): Promise<SupabaseClient> {
@@ -130,11 +131,46 @@ beforeAll(async () => {
     ids.dealId = created.id;
   }
 
+  // M5.6's own deal fixture - kept separate from ids.dealId so getDealContactsSection's
+  // single-threading-warning tests can start from zero linked contacts without disturbing the
+  // deal_contacts state the tests above leave behind on ids.dealId.
+  const { data: existingSecondDeal } = await service
+    .from("deals")
+    .select("id")
+    .eq("tenant_id", ids.tenantId)
+    .eq("reference", "D-5-6-1")
+    .maybeSingle();
+  if (existingSecondDeal) {
+    ids.secondDealId = existingSecondDeal.id;
+    await service.from("deal_contacts").delete().eq("deal_id", ids.secondDealId);
+  } else {
+    const { data: created, error: dealError } = await service
+      .from("deals")
+      .insert({
+        tenant_id: ids.tenantId,
+        reference: "D-5-6-1",
+        name: "M5.6 Contacts Section Test Deal",
+        account_id: ids.accountId,
+        practice_line_id: ids.practiceLineId,
+        stage_id: ids.openStageId,
+        client_type: "new",
+        owner_id: ids.bdeAuthId,
+        author_id: ids.bdeAuthId,
+        status: "active",
+        expected_close_date: "2027-03-01",
+      })
+      .select("id")
+      .single();
+    if (dealError) throw new Error(`seed second deal failed: ${dealError.message}`);
+    ids.secondDealId = created.id;
+  }
+
   await service.from("contacts").delete().eq("tenant_id", ids.tenantId);
 });
 
 afterAll(async () => {
   await service.from("deal_contacts").delete().eq("deal_id", ids.dealId);
+  await service.from("deal_contacts").delete().eq("deal_id", ids.secondDealId);
   await service.from("contacts").delete().eq("tenant_id", ids.tenantId);
   await service.from("account_practice_owners").delete().in("account_id", [ids.accountId, ids.entitledOtherAccountId]);
   await service.from("user_roles").delete().eq("tenant_id", ids.tenantId);
@@ -277,5 +313,84 @@ describe("createContact and linkContactToDeal, end to end against a real signed-
     const { data: alreadyLinked } = await service.from("deal_contacts").select("contact_id").eq("deal_id", ids.dealId).limit(1).single();
     const result = await linkContactToDeal(client, session.actor, ids.dealId, { contactId: alreadyLinked!.contact_id });
     expect(result).toEqual({ ok: false, code: "already_linked" });
+  });
+});
+
+// M5.6 exit criteria (docs/07-build-backlog.md): "Contact management on the deal with decision-role
+// badges; single-threading warning past Discovery." Proves getDealContactsSection end to end: the
+// bundled canAddContact/availableContacts picker data, and the single-threading warning's ⚠
+// unconfirmed default (docs/DECISIONS.md's D-13) - false at the first open stage regardless of
+// contact count, true once past it with fewer than two contacts, clearing at exactly two. Runs
+// against ids.secondDealId (a fixture kept separate from ids.dealId, above) specifically so these
+// assertions can start from zero linked contacts.
+describe("getDealContactsSection, end to end against a real signed-in session", () => {
+  it("canAddContact is true for an entitled bde, and availableContacts lists an unlinked account contact", async () => {
+    const client = await signIn("m5-5-bde@example.com");
+    const session = await getSessionActor(client);
+    if (session.status !== "active") throw new Error("expected an active session");
+
+    const created = await createContact(client, session.actor, {
+      accountId: ids.accountId,
+      firstName: "Dana",
+      lastName: "Diallo",
+      jobTitle: null,
+      email: null,
+      phone: null,
+      linkedinUrl: null,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    const section = await getDealContactsSection(client, session.actor, ids.secondDealId, 1);
+    expect(section.canAddContact).toBe(true);
+    expect(section.availableContacts.some((c) => c.id === created.contact.id)).toBe(true);
+    expect(section.contacts).toHaveLength(0);
+  });
+
+  it("is false at the first open stage even with zero contacts", async () => {
+    const client = await signIn("m5-5-bde@example.com");
+    const session = await getSessionActor(client);
+    if (session.status !== "active") throw new Error("expected an active session");
+
+    // sort_order 1 is ids.openStageId's own value (the fixture's Discovery stage, seeded above) -
+    // the tenant's only open stage, so it is always the "first" one listOpenStages returns.
+    const section = await getDealContactsSection(client, session.actor, ids.secondDealId, 1);
+    expect(section.showSingleThreadingWarning).toBe(false);
+  });
+
+  it("is true once past the first open stage with fewer than two contacts, and clears once a second is linked", async () => {
+    const client = await signIn("m5-5-bde@example.com");
+    const session = await getSessionActor(client);
+    if (session.status !== "active") throw new Error("expected an active session");
+
+    const zeroContacts = await getDealContactsSection(client, session.actor, ids.secondDealId, 2);
+    expect(zeroContacts.showSingleThreadingWarning).toBe(true);
+
+    const { data: danaContact } = await service.from("contacts").select("id").eq("account_id", ids.accountId).eq("first_name", "Dana").single();
+    const firstLink = await linkContactToDeal(client, session.actor, ids.secondDealId, { contactId: danaContact!.id });
+    expect(firstLink).toEqual({ ok: true, isPrimary: true });
+
+    const oneContact = await getDealContactsSection(client, session.actor, ids.secondDealId, 2);
+    expect(oneContact.showSingleThreadingWarning).toBe(true);
+    expect(oneContact.availableContacts.some((c) => c.id === danaContact!.id)).toBe(false);
+
+    const secondContact = await createContact(client, session.actor, {
+      accountId: ids.accountId,
+      firstName: "Erin",
+      lastName: "Ekwueme",
+      jobTitle: null,
+      email: null,
+      phone: null,
+      linkedinUrl: null,
+    });
+    expect(secondContact.ok).toBe(true);
+    if (!secondContact.ok) return;
+
+    const secondLink = await linkContactToDeal(client, session.actor, ids.secondDealId, { contactId: secondContact.contact.id });
+    expect(secondLink).toEqual({ ok: true, isPrimary: false });
+
+    const twoContacts = await getDealContactsSection(client, session.actor, ids.secondDealId, 2);
+    expect(twoContacts.showSingleThreadingWarning).toBe(false);
+    expect(twoContacts.contacts).toHaveLength(2);
   });
 });

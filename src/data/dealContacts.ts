@@ -52,3 +52,45 @@ export async function insertDealContact(supabase: SupabaseClient, input: NewDeal
     throw new Error(`insertDealContact failed: ${error.message}`);
   }
 }
+
+export interface DealContactRow {
+  contactId: string;
+  firstName: string;
+  lastName: string | null;
+  jobTitle: string | null;
+  lastEngagedAt: string | null;
+  decisionRole: DecisionRole;
+  isPrimary: boolean;
+}
+
+interface RawDealContactRow {
+  decision_role: DecisionRole;
+  is_primary: boolean;
+  contacts: { id: string; first_name: string; last_name: string | null; job_title: string | null; last_engaged_at: string | null };
+}
+
+// For the deal detail page's Stakeholders section (M5.6) - queries FROM deal_contacts (unlike
+// listLossOutcomesForReport's own deals-first convention, src/data/dealOutcomes.ts): here the join
+// row's own columns (decision_role, is_primary) are exactly what's being listed, one row per linked
+// contact, so there is no base-table-filter reason to query from `contacts` instead. Primary first,
+// then alphabetically - the primary contact is the one card a viewer most needs to find quickly.
+export async function listDealContactsForDeal(supabase: SupabaseClient, dealId: string): Promise<DealContactRow[]> {
+  const { data, error } = await supabase
+    .from("deal_contacts")
+    .select("decision_role, is_primary, contacts(id, first_name, last_name, job_title, last_engaged_at)")
+    .eq("deal_id", dealId);
+
+  if (error) throw new Error(`listDealContactsForDeal failed: ${error.message}`);
+
+  return (data as unknown as RawDealContactRow[])
+    .map((row) => ({
+      contactId: row.contacts.id,
+      firstName: row.contacts.first_name,
+      lastName: row.contacts.last_name,
+      jobTitle: row.contacts.job_title,
+      lastEngagedAt: row.contacts.last_engaged_at,
+      decisionRole: row.decision_role,
+      isPrimary: row.is_primary,
+    }))
+    .sort((a, b) => (a.isPrimary === b.isPrimary ? a.firstName.localeCompare(b.firstName) : a.isPrimary ? -1 : 1));
+}
