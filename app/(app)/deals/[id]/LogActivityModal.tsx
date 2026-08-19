@@ -10,6 +10,7 @@ import {
   type ActivityType,
   type OutcomeDisposition,
 } from "@/domain/activity";
+import type { DealContactRow } from "@/services/contacts";
 import type { AssignableUser } from "@/services/tasks";
 import { dateInTimezone } from "@/lib/dates";
 import { AddTaskModal, type AddTaskModalHandle } from "./AddTaskModal";
@@ -24,10 +25,14 @@ const DEFAULT_TYPE: ActivityType = "call";
 // as if it were specified. Only fires when the modal is closed and focus isn't already in a text
 // input, so it never hijacks normal typing elsewhere on the page.
 //
-// Deliberately missing, per docs/06-ui-spec.md's own field list, but not buildable yet: the
-// "contacts present" optional field (contacts don't exist until M5.5) - the same reasoning every
-// other narrower-than-spec vertical slice this session has taken. "Attachments" (M3.8) is built - a
-// plain multi-file input alongside outcome/disposition in the same collapsed-by-default section.
+// "Contacts present" (M5.7, docs/06-ui-spec.md's own field list) is a checkbox list of the deal's
+// own linked contacts (contactsSection.contacts, M5.6's getDealContactsSection) - not every account
+// contact, since src/services/activities.ts's own logActivity only accepts a contact already
+// linked to this deal via deal_contacts (the same set the Stakeholders section shows). Hidden
+// entirely when there are none to pick, the same "don't show a picker with nothing in it"
+// convention AddContactModal's own existing/new toggle already established for this deal. "Type
+// icon" and "attachments" (M3.8) round out the rest of docs/06-ui-spec.md's field list - a plain
+// multi-file input alongside outcome/disposition/contacts in the same collapsed-by-default section.
 // The secondary "Save and add task" button (M4.3) is built here as an embedded AddTaskModal
 // (showTrigger=false, opened imperatively) rather than a separate component the caller has to wire
 // up itself - "carries the context forward" (docs/06-ui-spec.md) means the just-created activity's
@@ -40,12 +45,14 @@ export function LogActivityModal({
   actorId,
   canAddTask = false,
   assignableUsers = [],
+  contacts = [],
 }: {
   dealId: string;
   timezone: string;
   actorId?: string;
   canAddTask?: boolean;
   assignableUsers?: AssignableUser[];
+  contacts?: DealContactRow[];
 }) {
   const router = useRouter();
   // Renders twice on the same page when the timeline is empty (header button + empty-state
@@ -62,6 +69,7 @@ export function LogActivityModal({
   const [summary, setSummary] = useState("");
   const [outcome, setOutcome] = useState("");
   const [outcomeDisposition, setOutcomeDisposition] = useState<OutcomeDisposition | "">("");
+  const [selectedContactIds, setSelectedContactIds] = useState<string[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [showOptional, setShowOptional] = useState(false);
   const [pending, setPending] = useState(false);
@@ -77,6 +85,7 @@ export function LogActivityModal({
     setSummary("");
     setOutcome("");
     setOutcomeDisposition("");
+    setSelectedContactIds([]);
     setFiles([]);
     setShowOptional(false);
     setError(null);
@@ -123,6 +132,7 @@ export function LogActivityModal({
         summary,
         outcome,
         outcomeDisposition,
+        contactIds: selectedContactIds,
       },
       files,
     );
@@ -141,6 +151,10 @@ export function LogActivityModal({
       return { ok: false };
     }
     return { ok: true, activityId: result.activityId };
+  }
+
+  function toggleContact(contactId: string) {
+    setSelectedContactIds((prev) => (prev.includes(contactId) ? prev.filter((id) => id !== contactId) : [...prev, contactId]));
   }
 
   async function handleSave() {
@@ -274,6 +288,30 @@ export function LogActivityModal({
                   ))}
                 </select>
               </div>
+              {contacts.length > 0 ? (
+                <fieldset className="flex flex-col gap-1.5">
+                  <legend className="text-sm font-medium text-ink">Contacts present (optional)</legend>
+                  <div className="flex flex-wrap gap-1.5">
+                    {contacts.map((contact) => (
+                      <label
+                        key={contact.contactId}
+                        className={`flex items-center gap-1.5 rounded-token border px-2.5 py-1 text-xs font-medium ${
+                          selectedContactIds.includes(contact.contactId) ? "border-accent bg-accent text-surface" : "border-line bg-raised text-ink"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={selectedContactIds.includes(contact.contactId)}
+                          onChange={() => toggleContact(contact.contactId)}
+                        />
+                        {contact.firstName} {contact.lastName ?? ""}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              ) : null}
+
               <div className="flex flex-col gap-1.5">
                 <label htmlFor={`${idPrefix}-attachments`} className="text-sm font-medium text-ink">
                   Attachments (optional)

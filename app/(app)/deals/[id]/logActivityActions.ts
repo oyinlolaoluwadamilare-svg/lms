@@ -42,7 +42,7 @@ function describeAttachError(fileName: string, code: "not_found" | "denied" | "r
 // other supported argument type.
 export async function logActivityAction(
   dealId: string,
-  input: { type: string; activityDate: string; summary: string; outcome: string; outcomeDisposition: string },
+  input: { type: string; activityDate: string; summary: string; outcome: string; outcomeDisposition: string; contactIds: string[] },
   files: File[],
 ): Promise<LogActivityActionResult> {
   const parsed = logActivitySchema.safeParse({
@@ -51,6 +51,7 @@ export async function logActivityAction(
     summary: input.summary,
     outcome: input.outcome || undefined,
     outcomeDisposition: input.outcomeDisposition || undefined,
+    contactIds: input.contactIds,
   });
 
   if (!parsed.success) {
@@ -70,6 +71,7 @@ export async function logActivityAction(
     summary: parsed.data.summary,
     outcome: parsed.data.outcome ?? null,
     outcomeDisposition: parsed.data.outcomeDisposition ?? null,
+    contactIds: parsed.data.contactIds,
   });
 
   if (!result.ok) {
@@ -81,6 +83,13 @@ export async function logActivityAction(
       case "activity_date_in_future":
         // Verbatim per docs/06-ui-spec.md's own inline-error copy.
         return { ok: false, message: "future intent is a task, not an engagement" };
+      case "contact_not_linked":
+        // Structurally unreachable from the UI as shipped: LogActivityModal's own contact picker
+        // (M5.7) only ever offers the deal's already-linked contacts (contactsSection.contacts,
+        // M5.6), so a normal submission can never name an unlinked id. Handled anyway rather than
+        // asserted away, the same defensive-but-honest shape describeAttachError's own comment
+        // already uses for its own structurally-unreachable branches.
+        return { ok: false, message: "One of the selected contacts is no longer linked to this deal." };
     }
   }
 

@@ -36,6 +36,8 @@ const ids = {
   otherPracticeBdeAuthId: "",
   executiveAuthId: "",
   dealId: "",
+  linkedContactId: "",
+  notLinkedContactId: "",
 };
 
 function signIn(email: string): Promise<SupabaseClient> {
@@ -114,13 +116,39 @@ beforeAll(async () => {
       expected_close_date: "2027-06-01",
     },
   );
+
+  // M5.7's own contactIds fixture - one contact linked to the deal (deal_contacts), one deliberately
+  // not, to reach both logActivity's friendly pre-check and its success path.
+  ids.linkedContactId = await findOrCreateByUniqueMatch(
+    service,
+    "contacts",
+    { tenant_id: ids.tenantId, account_id: ids.accountId, first_name: "LogActivityLinked" },
+    { tenant_id: ids.tenantId, account_id: ids.accountId, first_name: "LogActivityLinked" },
+  );
+  ids.notLinkedContactId = await findOrCreateByUniqueMatch(
+    service,
+    "contacts",
+    { tenant_id: ids.tenantId, account_id: ids.accountId, first_name: "LogActivityNotLinked" },
+    { tenant_id: ids.tenantId, account_id: ids.accountId, first_name: "LogActivityNotLinked" },
+  );
+  const { data: existingLink } = await service
+    .from("deal_contacts")
+    .select("deal_id")
+    .eq("deal_id", ids.dealId)
+    .eq("contact_id", ids.linkedContactId)
+    .maybeSingle();
+  if (!existingLink) {
+    await service
+      .from("deal_contacts")
+      .insert({ deal_id: ids.dealId, contact_id: ids.linkedContactId, is_primary: true, added_by: ids.bdeAuthId });
+  }
 });
 
 afterAll(async () => {
   await service.from("user_roles").delete().eq("tenant_id", ids.tenantId);
   // Deliberately not deleting activities, the deal, the account, the stage, the practice lines, the
-  // users, or the tenant - see this file's header comment. beforeAll is find-or-create for all of
-  // these.
+  // users, the contacts, deal_contacts, or the tenant - see this file's header comment. beforeAll is
+  // find-or-create for all of these.
 });
 
 describe("logActivity, end to end against a real signed-in session", () => {
@@ -261,6 +289,70 @@ describe("logActivity, end to end against a real signed-in session", () => {
       outcomeDisposition: null,
     });
     expect(result).toEqual({ ok: false, code: "activity_date_in_future" });
+
+    const { count: after } = await service
+      .from("activities")
+      .select("id", { count: "exact", head: true })
+      .eq("deal_id", ids.dealId);
+    expect(after).toBe(before);
+  });
+
+  // M5.7 exit criteria (docs/07-build-backlog.md): "Activity attribution to contacts; contact-level
+  // last-engaged." Proves the friendly pre-check (contact_not_linked, before any insert) and the
+  // success path (activity_contacts row written, contacts.last_engaged_at advanced) end to end
+  // against the real hosted project.
+  it("attributing an already-linked contact writes activity_contacts and advances that contact's own last_engaged_at", async () => {
+    const client = await signIn("m3-2-bde@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const today = dateInTimezone(new Date().toISOString(), TIMEZONE);
+    const result = await logActivity(client, session.actor, TIMEZONE, {
+      dealId: ids.dealId,
+      type: "call",
+      activityDate: today,
+      summary: "Call with the linked contact present",
+      outcome: null,
+      outcomeDisposition: null,
+      contactIds: [ids.linkedContactId],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const { data: attributionRow } = await service
+      .from("activity_contacts")
+      .select("contact_id")
+      .eq("activity_id", result.activity.id)
+      .maybeSingle();
+    expect(attributionRow?.contact_id).toBe(ids.linkedContactId);
+
+    const { data: contactRow } = await service.from("contacts").select("last_engaged_at").eq("id", ids.linkedContactId).single();
+    expect(contactRow?.last_engaged_at).toBe(today);
+  });
+
+  it("rejects a contactId not linked to the deal before any insert is attempted", async () => {
+    const client = await signIn("m3-2-bde@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const { count: before } = await service
+      .from("activities")
+      .select("id", { count: "exact", head: true })
+      .eq("deal_id", ids.dealId);
+
+    const result = await logActivity(client, session.actor, TIMEZONE, {
+      dealId: ids.dealId,
+      type: "call",
+      activityDate: dateInTimezone(new Date().toISOString(), TIMEZONE),
+      summary: "Should never be written",
+      outcome: null,
+      outcomeDisposition: null,
+      contactIds: [ids.notLinkedContactId],
+    });
+    expect(result).toEqual({ ok: false, code: "contact_not_linked" });
 
     const { count: after } = await service
       .from("activities")

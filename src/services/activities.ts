@@ -1,7 +1,9 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Actor } from "@/auth/permissions";
 import { applyActivityEdit, getActivityForAuthorization, insertActivity, retractActivityRow, type InsertedActivity } from "@/data/activities";
+import { insertActivityContacts } from "@/data/activityContacts";
 import { insertActivityRevisions, type FieldChange } from "@/data/activityRevisions";
+import { listDealContactsForDeal } from "@/data/dealContacts";
 import { getDealForAuthorization } from "@/data/deals";
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import { dateInTimezone } from "@/lib/dates";
@@ -16,11 +18,19 @@ export interface LogActivityInput {
   summary: string;
   outcome: string | null;
   outcomeDisposition: OutcomeDisposition | null;
+  // docs/06-ui-spec.md's Log Activity modal: "contacts present" (M5.7). Every id must already be
+  // linked to this deal via deal_contacts - "stakeholders" (docs/06-ui-spec.md's Stakeholders
+  // section) and "contacts present at an engagement" are the same set, so attributing someone who
+  // was never even linked to the deal would let the two sections disagree about who's involved.
+  // Optional, defaulting to empty - not every logged engagement has a contact attached yet (M5.7
+  // offers the picker, it doesn't require using it, and every pre-M5.7 caller of this function
+  // omits it entirely).
+  contactIds?: string[];
 }
 
 export type LogActivityResult =
   | { ok: true; activity: InsertedActivity }
-  | { ok: false; code: "not_found" | "denied" | "activity_date_in_future" };
+  | { ok: false; code: "not_found" | "denied" | "activity_date_in_future" | "contact_not_linked" };
 
 // The single path for logging an activity (docs/07-build-backlog.md M3.2). Mirrors changeStage's
 // shape exactly (src/services/deals.ts): not_found before denied (RLS already hid the row from an
@@ -35,9 +45,18 @@ export type LogActivityResult =
 //
 // Known gap, same one createDeal/changeStage's own comments already flag for every compound write
 // in this Supabase-client architecture: the activity insert (which itself fires migration 0009's
-// trg_activity_refresh trigger, updating the deal's last_engaged_at/engagement_count) and the
-// audit write below are two separate calls, not one transaction - if the audit write throws, the
-// activity (and its already-triggered deal update) exist, un-audited.
+// trg_activity_refresh trigger, updating the deal's last_engaged_at/engagement_count), the
+// activity_contacts insert (M5.7 - which fires migration 0019's own trg_activity_contact_refresh,
+// updating each attributed contact's last_engaged_at) and the audit write below are three separate
+// calls, not one transaction - if a later call throws, everything before it still exists, un-audited
+// or un-attributed as the case may be.
+//
+// contactIds' own validation (M5.7) is checked BEFORE the activity is ever inserted, not after -
+// the same "TS friendly check, DB non-bypassable backstop" split every compound write since M5.2
+// uses (migration 0019's own validate_activity_contact() trigger is the non-bypassable backstop
+// behind this), chosen specifically so a bad contactId never leaves a half-created, unattributed
+// activity behind: better to reject the whole call up front than to succeed at creating the
+// activity and then fail partway through attributing contacts to it.
 export async function logActivity(
   supabase: SupabaseClient,
   actor: Actor,
@@ -65,6 +84,15 @@ export async function logActivity(
     return { ok: false, code: "activity_date_in_future" };
   }
 
+  const contactIds = input.contactIds ?? [];
+  if (contactIds.length > 0) {
+    const dealContacts = await listDealContactsForDeal(supabase, input.dealId);
+    const linkedContactIds = new Set(dealContacts.map((c) => c.contactId));
+    if (contactIds.some((id) => !linkedContactIds.has(id))) {
+      return { ok: false, code: "contact_not_linked" };
+    }
+  }
+
   const activity = await insertActivity(supabase, {
     tenantId: actor.tenantId,
     dealId: input.dealId,
@@ -76,13 +104,15 @@ export async function logActivity(
     authorId: actor.id,
   });
 
+  await insertActivityContacts(supabase, activity.id, contactIds);
+
   await writeAudit({
     tenantId: actor.tenantId,
     actorId: actor.id,
     entityType: "activity",
     entityId: activity.id,
     action: "activity.create",
-    after: { dealId: input.dealId, type: input.type, activityDate: input.activityDate },
+    after: { dealId: input.dealId, type: input.type, activityDate: input.activityDate, contactIds },
   });
 
   return { ok: true, activity };

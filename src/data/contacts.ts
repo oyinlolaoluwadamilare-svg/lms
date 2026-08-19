@@ -39,10 +39,9 @@ function toDomain(row: ContactRow): Contact {
     phone: row.phone,
     linkedinUrl: row.linkedin_url,
     isActive: row.is_active,
-    // Always null today - migration 0018's own column comment: "no write path yet (M5.7:
-    // 'contact-level last-engaged')." Exposed anyway (M5.6's Stakeholders card shows it as "Never
-    // engaged" for every contact until M5.7 wires up the real derivation), the same narrower-than-
-    // spec-because-its-dependency-doesn't-exist-yet shape this session already uses everywhere.
+    // Has a real write path since M5.7 (migration 0019's refresh_contact_engagement(), fired by
+    // attributing a contact to a client-facing activity) - null still means "never engaged," not
+    // "not implemented yet," for any contact that has never been attributed to one.
     lastEngagedAt: row.last_engaged_at,
   };
 }

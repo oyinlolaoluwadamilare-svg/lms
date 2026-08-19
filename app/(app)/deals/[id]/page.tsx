@@ -123,6 +123,7 @@ export default async function DealDetailPage({
                 actorId={currentActorId ?? undefined}
                 canAddTask={addTaskContext.canAddTask}
                 assignableUsers={addTaskContext.assignableUsers}
+                contacts={contactsSection.contacts}
               />
             ) : null}
             {addTaskContext.canAddTask && currentActorId ? (
@@ -157,17 +158,17 @@ export default async function DealDetailPage({
           an inline "Open tasks" list with per-row inline complete, which depends on M4.5 (the same
           milestone that builds My Work's own inline-complete interaction this list would otherwise
           duplicate ahead of time). Log Activity (M3.4), Add Task (M4.3), the next-action strip
-          (M4.4), Edit Deal (M1.7), Mark Won/Lost (M5.3), the last-engaged chip (M3.7) and
-          Stakeholders/Add Contact (M5.6) are what now exist; Advance Stage and Escalate are still
-          missing (M2.2's board drag already moves stage; Escalate is M5+). Mark Won/Lost/Add
-          Contact render as plain buttons, not "under a menu" the way docs/06-ui-spec.md's own line
-          names it - Escalate doesn't exist yet either, and this codebase has no dropdown-menu
-          primitive; building one for a handful of buttons ahead of Escalate actually needing it
-          would be premature abstraction (CLAUDE.md #6). The engagement timeline below (M3.5/M3.6)
-          supersedes M2.4's narrower stage-history-only panel, merging it with the activities this
-          modal writes - see its own section comment for what of the full spec is still deliberately
-          missing (attributed contacts, M5.7). Otherwise this is the same read-only skeleton
-          docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
+          (M4.4), Edit Deal (M1.7), Mark Won/Lost (M5.3), the last-engaged chip (M3.7),
+          Stakeholders/Add Contact (M5.6) and contact attribution (M5.7) are what now exist; Advance
+          Stage and Escalate are still missing (M2.2's board drag already moves stage; Escalate is
+          M5+). Mark Won/Lost/Add Contact render as plain buttons, not "under a menu" the way
+          docs/06-ui-spec.md's own line names it - Escalate doesn't exist yet either, and this
+          codebase has no dropdown-menu primitive; building one for a handful of buttons ahead of
+          Escalate actually needing it would be premature abstraction (CLAUDE.md #6). The engagement
+          timeline below (M3.5/M3.6) supersedes M2.4's narrower stage-history-only panel, merging it
+          with the activities this modal writes and, since M5.7, the contacts attributed to them.
+          Otherwise this is the same read-only skeleton docs/07-build-backlog.md M1.6 asked for:
+          header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
@@ -232,12 +233,14 @@ export default async function DealDetailPage({
       {/* M5.6 (docs/07-build-backlog.md): "Contact management on the deal with decision-role
           badges; single-threading warning past Discovery." Add-only for now (docs/DECISIONS.md's
           D-14) - contact cards are read-only display, no edit/remove action, matching
-          migration 0018's own insert-only deal_contacts schema. lastEngagedAt is always null today
-          (migration 0018's own column comment: "no write path yet", M5.7) so every card renders
-          "Never engaged" until that milestone wires up the real derivation - a known, disclosed gap,
-          not a bug. showSingleThreadingWarning uses isPastFirstOpenStage's own ⚠ unconfirmed default
-          for what "past Discovery" means (src/domain/deal.ts's own comment, docs/DECISIONS.md's
-          D-13) - confirm or replace with the product owner before relying on it. */}
+          migration 0018's own insert-only deal_contacts schema. lastEngagedAt now has a real write
+          path (M5.7's migration 0019: attributing a contact to a client-facing activity updates it
+          transactionally) - it still renders "Never engaged" for any contact never attributed to
+          one, the same "null is not zero, never engaged is a real distinct state" reasoning
+          formatLastEngaged's own comment already gives at the deal level. showSingleThreadingWarning
+          uses isPastFirstOpenStage's own ⚠ unconfirmed default for what "past Discovery" means
+          (src/domain/deal.ts's own comment, docs/DECISIONS.md's D-13) - confirm or replace with the
+          product owner before relying on it. */}
       <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
         <h2 className="text-sm font-semibold text-ink">Stakeholders</h2>
 
@@ -278,9 +281,9 @@ export default async function DealDetailPage({
       {/* M3.5/M3.6 (docs/07-build-backlog.md): "Engagement timeline component merging activities
           and stage events, newest first, with type and author filters and a designed empty state
           ... edited marker with revision history ... retracted entries appear struck through with
-          the reason, never removed." Still narrower than docs/06-ui-spec.md's full description in
-          one way, because its dependency doesn't exist yet: no "attributed contacts" (M5.7). "Type
-          icon" is a text label - no icon system exists in this codebase yet. */}
+          the reason, never removed." M5.7 adds the "attributed contacts" field docs/06-ui-spec.md's
+          full description names - the only remaining gap against that spec is "Type icon", which
+          renders as a text label since no icon system exists in this codebase yet. */}
       <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-sm font-semibold text-ink">Engagement timeline</h2>
@@ -299,6 +302,7 @@ export default async function DealDetailPage({
                   actorId={currentActorId ?? undefined}
                   canAddTask={addTaskContext.canAddTask}
                   assignableUsers={addTaskContext.assignableUsers}
+                  contacts={contactsSection.contacts}
                 />
               </div>
             ) : null}
@@ -349,6 +353,14 @@ export default async function DealDetailPage({
                     {entry.outcome ? ` · ${entry.outcome}` : ""}
                     {entry.outcomeDisposition ? ` (${entry.outcomeDisposition.replace("_", " ")})` : ""}
                   </p>
+
+                  {/* M5.7 (docs/07-build-backlog.md): "Activity attribution to contacts" - the
+                      timeline's own "attributed contacts" field (docs/06-ui-spec.md). */}
+                  {entry.attributedContacts.length > 0 ? (
+                    <p className="text-xs text-muted">
+                      With: {entry.attributedContacts.map((c) => `${c.firstName} ${c.lastName ?? ""}`.trim()).join(", ")}
+                    </p>
+                  ) : null}
 
                   {entry.retractedAt ? (
                     <p className="text-xs text-lost">

@@ -12,6 +12,10 @@ export const logActivitySchema = z.object({
   summary: z.string().trim().min(1, "Summary is required"),
   outcome: z.string().trim().optional(),
   outcomeDisposition: z.enum(OUTCOME_DISPOSITIONS).optional(),
+  // "contacts present" (M5.7) - shape only; contactIds must already be linked to the deal
+  // (src/services/activities.ts's own logActivity check), the same schema-checks-shape-service-
+  // checks-business-rules split every other field on this object already follows.
+  contactIds: z.array(z.string().uuid()).default([]),
 });
 
 export type LogActivityFormValues = z.infer<typeof logActivitySchema>;
