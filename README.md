@@ -2063,6 +2063,96 @@ Verified: typecheck, lint, unit (331, 7 new), RLS (274, unchanged - no new migra
 integration (158, 3 new), and manual browser QA of the Stakeholders section and Add Contact modal
 against the real hosted project, all green.
 
+**M5.7** ("Activity attribution to contacts; contact-level last-engaged.") closes the last deferral
+chain migration 0008 opened back at M3.1: `activity_contacts` was named there and explicitly deferred
+("the same deliverable under a different name, scheduled after contacts actually exists"), and
+`contacts.last_engaged_at` has carried "no write path yet (M5.7)" in its own column comment since
+M5.5. Both land in this one migration (`0019_activity_contacts`), with the service/UI layer built
+directly on top - no open business-rule questions this time (unlike M5.4's D-12 or M5.6's D-13/D-14):
+docs/01-domain-model.md already names the table's exact shape (`activity_id, contact_id`) and its
+derivation rule ("max attributed client-facing activity date"), so this milestone had nothing left to
+infer beyond ordinary implementation choices.
+
+**Table shape, deliberately narrower than `deal_contacts`.** `activity_contacts` has no
+`decision_role`/`is_primary`-shaped columns - the domain model's own field list for it is just the
+bare join, unlike the richer list it gives `deal_contacts`, so this migration follows that narrower
+shape on purpose rather than copying the sibling table's fuller one out of habit. Insert-only, no
+update/delete policy - the same reasoning migration 0018 gave for `deal_contacts`, doubled here since
+activities themselves are append-only (CLAUDE.md #4): a join table recording who was present at one
+can't legitimately need editing either.
+
+**A contact must already be a stakeholder on the activity's own deal.** Not stated outright in any
+doc, but the same class of obvious-but-unstated structural requirement migration 0018's own
+`contact_wrong_account` check already is: "stakeholders" (the Stakeholders section, M5.6) and
+"contacts present at an engagement" (this milestone) are the same set, so attributing someone never
+even linked to the deal would let the two sections disagree about who's actually involved. Enforced
+by `validate_activity_contact()` - `security definer`, for the identical reason migration 0018's own
+`validate_deal_contact()` needed it (its internal `deal_contacts` lookup must see ground truth
+regardless of the calling actor's own RLS visibility, or a caller outside the deal's practice would
+see a false "not linked" and trip this exception instead of the RLS-permission rejection that should
+have stopped them first) - not a bug found this time, just the lesson from that one applied up front.
+`src/services/activities.ts`'s `logActivity` does the friendly TS-layer pre-check in front of it, the
+same "TS friendly check, DB non-bypassable backstop" split every compound write since M5.2 uses,
+chosen specifically so a bad contact id is rejected before the activity is ever inserted, not partway
+through attributing contacts to an activity that already exists.
+
+**No new permission action.** docs/02-permission-matrix.md names no `activity.attribute_contact` (or
+similar) anywhere - attribution rides along with `activity.create`'s own existing scope, the same way
+`activity.attach_file` (M3.8) already piggybacks on the same activity being created rather than
+needing its own grant. `activity_contacts_insert`'s RLS mirrors `activities_insert`/`documents_insert`
+exactly (own/practice/practice/denied/tenant, through the activity's own `deal_id`) rather than
+inventing a new scope shape.
+
+**The engagement-refresh triggers, the contact-level analogue of migration 0009's
+`refresh_deal_engagement()`.** `refresh_contact_engagement(contact_id)` is a single-contact full
+recompute (max `activity_date` where `is_client_facing` and not retracted, scoped through
+`activity_contacts` instead of `activities.deal_id` directly) - deliberately NOT one `GROUP BY` query
+across every affected contact at once, because a plain aggregate keyed to one fixed id always returns
+exactly one row (correctly resetting `last_engaged_at` to null the moment nothing qualifies anymore),
+whereas a `GROUP BY` would silently omit a contact from its result the instant their last qualifying
+activity is retracted, leaving a stale value instead of resetting it - exactly the kind of stale
+derived field CLAUDE.md #7 says is worse than none. Two trigger wrappers call it: `AFTER INSERT ON
+activity_contacts` (attribution time - there's no row to recompute from before that) and `AFTER
+UPDATE ON activities` (an edit or retraction of the underlying activity, mirroring 0009's own
+INSERT-OR-UPDATE reasoning one join-hop further out, recomputing every contact currently attributed
+to that activity). Both verified directly against local Postgres before ever reaching the hosted
+project: attributing a not-yet-linked contact raises the expected exception; attributing a linked one
+sets `last_engaged_at` to the activity's own `activity_date`; retracting that activity resets it to
+null.
+
+**The UI**: a "Contacts present" checkbox list in `LogActivityModal`, scoped to the deal's own linked
+contacts (`contactsSection.contacts`, M5.6's `getDealContactsSection`) rather than every account
+contact - the same set `logActivity`'s own pre-check requires, and the same "don't show a picker with
+nothing in it" convention `AddContactModal`'s existing/new toggle already established, so the
+fieldset is simply absent when the deal has no linked contacts yet. The Engagement timeline now
+renders each entry's attributed contacts ("With: ..."), completing docs/06-ui-spec.md's full field
+list for a timeline entry - "Type icon" (a text label, no icon system exists) is the only remaining
+gap against that spec, unrelated to this milestone. The Stakeholders section's last-engaged column,
+which had rendered "Never engaged" for every contact since M5.6 for lack of a write path, now shows
+real dates.
+
+New `tests/rls/activity_contacts.spec.ts` (8 tests, local Postgres) proves the RLS shape and both
+trigger behaviours directly. Two new tests in `tests/integration/log-activity.spec.ts` (against the
+real hosted project, real signed-in sessions) prove `logActivity`'s own contactIds handling end to
+end: attributing an already-linked contact writes the `activity_contacts` row and advances that
+contact's `last_engaged_at` to the activity's own date; a contact never linked to the deal is
+rejected with `contact_not_linked` before any insert is attempted. Manual browser QA against the real
+hosted project confirmed the full chain visually: the "Contacts present" picker, the timeline's own
+"With: ..." attribution line, and the Stakeholders card's last-engaged date advancing from "Never
+engaged" to a real date, all in one save.
+
+Applying migration 0019 to the real hosted project needed a Supabase Personal Access Token supplied
+ad hoc in chat, the same mechanism `db/migrations/README.md`'s own `0006`/`0007` note already
+describes (this sandbox has no raw Postgres/DNS egress to the hosted project - confirmed directly by
+testing `DATABASE_URL` itself, which fails DNS resolution - so the Management API's SQL endpoint over
+HTTPS is the only path); applied and verified (`security_type = DEFINER` on all four new functions,
+the two RLS policies present and select/insert-only) before any hosted testing began.
+
+Verified: typecheck, lint, unit (331, unchanged - no new domain functions this milestone), RLS (282, 8
+new), integration (160, 2 new), and manual browser QA of the Log Activity contact picker and its
+downstream effects on the timeline and Stakeholders section, against the real hosted project, all
+green.
+
 ## Commands
 
 ```

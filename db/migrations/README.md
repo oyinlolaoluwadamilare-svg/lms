@@ -427,3 +427,63 @@ exception from the trigger; and linking the same contact twice is rejected as `a
 for `analytics.view_practice`) but had no dedicated per-action scope test until now - new
 `tests/permissions/contact-matrix.spec.ts` (21 tests) closes that gap. No new UI - schema and service
 layer only, per the backlog's own split from M5.6 ("Contact management on the deal").
+
+## `0019_activity_contacts` (M5.7)
+
+Closes the deferral chain migration `0008`'s own header comment opened at M3.1: `activity_contacts`
+was named there and explicitly deferred to this exact milestone ("the same deliverable under a
+different name, scheduled after contacts actually exists"), and `contacts.last_engaged_at` (migration
+`0018`) has carried "no write path yet (M5.7)" in its own column comment since M5.5. Both close here.
+
+Deliberately narrower than `deal_contacts` (migration `0018`): just `activity_id, contact_id` as its
+primary key, no `decision_role`/`is_primary`-shaped columns at all - `docs/01-domain-model.md`'s own
+field list for this table is that bare join, unlike the richer list it gives `deal_contacts`, so this
+follows that narrower shape on purpose. Insert-only, no update/delete policy - the same reasoning
+`0018` gave for `deal_contacts`, doubled here since activities themselves are append-only (CLAUDE.md
+#4): a join table recording who was present at an activity can't legitimately need editing either.
+
+`validate_activity_contact()` (before-insert, `security definer`) enforces a rule no doc states
+outright but treats the same way `0018`'s own `contact_wrong_account` check does: a contact must
+already be linked to the activity's own deal via `deal_contacts` before it can be attributed to an
+activity on that deal - "stakeholders" and "contacts present at an engagement" are the same set, and
+letting them disagree would contradict the Stakeholders section (M5.6) itself. `security definer` is
+required for the identical reason `0018`'s own `validate_deal_contact()` needed it (documented there
+as a real bug that migration's own verification pass caught) - applied here proactively, not
+rediscovered: a plain invoker-rights version would let a caller outside the deal's practice see a
+false "not linked" (since `deal_contacts_select` already hides every row from them) and trip this
+exception instead of the RLS-permission rejection that should stop them first.
+
+Two trigger functions maintain `contacts.last_engaged_at`, the contact-level analogue of migration
+`0009`'s own `refresh_deal_engagement()`: `refresh_contact_engagement(contact_id)` is a single-contact
+full recompute (max `activity_date` where `is_client_facing` and not retracted, scoped through
+`activity_contacts` rather than `activities.deal_id` directly) - deliberately not one `GROUP BY`
+query across every affected contact, since a plain aggregate keyed to a single fixed id always
+returns exactly one row (correctly resetting to null once nothing qualifies), whereas a `GROUP BY`
+would silently drop a contact from its result the moment their last qualifying activity is retracted,
+leaving a stale value instead of resetting it. `trg_activity_contact_refresh` (`AFTER INSERT ON
+activity_contacts`) calls it at attribution time; `trg_activity_update_refresh_contacts` (`AFTER
+UPDATE ON activities`, mirroring `0009`'s own INSERT-OR-UPDATE reasoning one join-hop further out)
+calls it for every contact currently attributed to an activity that's just been edited or retracted -
+without this second trigger, retracting an activity that had already been attributed to a contact
+would leave that contact's `last_engaged_at` reflecting an engagement CLAUDE.md #4's retraction
+discipline says should no longer count.
+
+No new permission action: `docs/02-permission-matrix.md` names no `activity.attribute_contact` (or
+similar) anywhere, so attribution rides along with `activity.create`'s own existing scope - the same
+way `activity.attach_file` (migration `0010`) already piggybacks on the activity being created rather
+than needing its own grant. `activity_contacts_insert`/`activity_contacts_select` mirror
+`activities_insert`/`activities_select` (and `documents_insert`'s own identical mirror of them)
+exactly, through the activity's own `deal_id` - own/practice/practice/denied/tenant for insert,
+tenant-wide-for-executive/tenant_admin-else-practice for select.
+
+Verified locally before the hosted apply: applied/rolled-back/re-applied against local Postgres, plus
+a manual SQL smoke test proving all three behaviours directly (attributing a not-yet-linked contact
+raises the expected exception; attributing a linked one sets `last_engaged_at` to the activity's own
+`activity_date`; retracting that activity resets it to null). New `tests/rls/activity_contacts.spec.ts`
+(8 tests, local Postgres) proves the same shape through the real RLS/trigger stack. Applied to the
+real hosted project via the Management API (a Personal Access Token supplied ad hoc in chat, the same
+mechanism this file's own `0006`/`0007` note describes - this sandbox has no raw Postgres/DNS egress
+to the hosted project, confirmed directly by testing `DATABASE_URL` itself, which fails DNS
+resolution); `schema_migrations` there now lists `0001` through `0019`, and `security_type = DEFINER`
+was confirmed directly on all four new functions. Two new tests in `tests/integration/log-activity.spec.ts`
+prove `logActivity`'s own `contactIds` handling end to end against the real hosted project.
