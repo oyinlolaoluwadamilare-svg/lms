@@ -2148,6 +2148,18 @@ testing `DATABASE_URL` itself, which fails DNS resolution - so the Management AP
 HTTPS is the only path); applied and verified (`security_type = DEFINER` on all four new functions,
 the two RLS policies present and select/insert-only) before any hosted testing began.
 
+**A pre-existing test-suite flake found incidentally, not caused by this milestone, worth recording
+so a future session doesn't rediscover it as a false regression**: a full integration-suite run made
+during this session's own UTC 23:00-24:00 hour hit 25 failures, every one an `activity_date_not_future`
+violation (or downstream of one) - migration 0008's own comment already documents why: that
+constraint's `current_date` is evaluated in Postgres's session timezone (UTC), while several specs
+(this one's own included) compute "today" via `dateInTimezone(now, "Africa/Lagos")`, which is one
+calendar day ahead of UTC for exactly that one hour each day. Confirmed as this artifact and not a
+real regression by timing correlation, exact error-text match, and an earlier same-file run passing
+cleanly before the boundary was crossed; re-running the full suite after UTC 00:00 passed all 160
+tests. Not fixed here - it is a pre-existing, general test-suite timing sensitivity across several
+milestones' own specs, not something M5.7 introduced or owns.
+
 Verified: typecheck, lint, unit (331, unchanged - no new domain functions this milestone), RLS (282, 8
 new), integration (160, 2 new), and manual browser QA of the Log Activity contact picker and its
 downstream effects on the timeline and Stakeholders section, against the real hosted project, all
