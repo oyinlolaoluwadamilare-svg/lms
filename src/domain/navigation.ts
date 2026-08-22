@@ -46,6 +46,14 @@ export const NAV_BY_ROLE: Record<Role, readonly NavItem[]> = {
     { label: "Dashboard", href: "/dashboard" },
     { label: "Analytics", href: "/analytics" },
     { label: "Pipeline (read)", href: "/deals" },
+    // M5.8 (docs/07-build-backlog.md: "Account 360 screen"): docs/02-permission-matrix.md gives
+    // Executive tenant-wide account.view, but docs/06-ui-spec.md's own "Navigation, per role" table
+    // lists Executive's nav as "Dashboard · Analytics · Pipeline (read)" with no Accounts entry at
+    // all - the same shape of table/permission mismatch already found and defaulted once before for
+    // Director's missing "Team" entry (see that entry's own comment above). Asked via
+    // AskUserQuestion; the product owner confirmed treating the table as an incomplete
+    // transcription and adding this entry, consistent with Executive's own tenant-wide account.view.
+    { label: "Accounts", href: "/accounts" },
   ],
   tenant_admin: [
     { label: "Dashboard", href: "/dashboard" },

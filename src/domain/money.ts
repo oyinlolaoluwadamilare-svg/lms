@@ -56,6 +56,26 @@ export function formatMoney(money: Money, decimalPlaces = 2): string {
   return `${money.currency} ${whole.toLocaleString("en-US")}.${fractionStr}`;
 }
 
+// For Account 360's tiles (M5.8: "open pipeline, won revenue"), which sum a Money value across
+// several deals that could in principle carry different currencies - D-08b (which currencies a
+// tenant may enable, and its own reporting-currency default) is still an open question, and no FX
+// conversion exists anywhere in this codebase yet (D-08's own note: the rate source itself is only
+// decided in principle, not built). Rather than silently picking one currency and dropping the
+// rest, or inventing a conversion this codebase has no rate source for, this returns one Money per
+// distinct currency actually present - typically a single entry in practice (every seed/demo tenant
+// uses one currency today), but never silently lossy if that ever stops being true. Sorted by
+// currency code for a deterministic render order.
+export function sumMoneyByCurrency(values: Array<Money | null>): Money[] {
+  const totals = new Map<string, bigint>();
+  for (const value of values) {
+    if (value === null) continue;
+    totals.set(value.currency, (totals.get(value.currency) ?? 0n) + value.amountMinor);
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([currency, amountMinor]) => ({ amountMinor, currency }));
+}
+
 // The exact inverse of toMinorUnits - for pre-filling an editable amount input with the deal's
 // current value (M1.7's edit form), where a currency prefix and thousands separators would just be
 // noise the user has to delete before typing a new amount. No toLocaleString grouping here on

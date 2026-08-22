@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { parseMoneyMinor } from "@/domain/money";
+import { parseMoneyMinor, type Money } from "@/domain/money";
 
 export interface LossOutcomeRow {
   practiceLineId: string;
@@ -58,5 +58,47 @@ export async function listLossOutcomesForReport(supabase: SupabaseClient, practi
       competitorName: row.deal_outcomes.competitor_name,
       reasonLabel: row.deal_outcomes.outcome_reasons.label,
     };
+  });
+}
+
+interface RawWonOutcomeRow {
+  negotiated_value_minor: string | null;
+  proposal_value_minor: string | null;
+  currency_code: string;
+  deal_outcomes: { final_value_minor: string | null; currency_code: string | null } | null;
+}
+
+// D-15 (docs/DECISIONS.md): "won revenue" (Account 360, M5.8) prefers the value actually recorded
+// at close (`final_value_minor`, M5.2's closeDeal) over the deal's own last value, falling back to
+// it when no final value was recorded (optional, M5.3). Queries FROM deals, the same convention
+// listLossOutcomesForReport already uses - filtering on the base table's own columns rather than an
+// embedded relationship. Every deals.status = 'won' row has exactly one deal_outcomes row by
+// construction (the same invariant listLossOutcomesForReport's own comment documents for 'lost'),
+// so `deal_outcomes` is never null here in practice; still handled as an if-guard rather than a
+// non-null assertion, the same defensive-but-honest shape this codebase uses throughout.
+//
+// Returns `null` (not 0) for a won deal with no recorded value anywhere (no final value, no
+// negotiated/proposal value either) - the same "null is not zero" reasoning `dealValue`'s own
+// comment gives: a deal nobody ever valued is a different fact from a deal valued at zero, and
+// `sumMoneyByCurrency` already skips nulls, so this never silently deflates "won revenue" by
+// pretending an unvalued deal contributed nothing measurable rather than nothing recorded.
+export async function listWonOutcomesForAccount(supabase: SupabaseClient, accountId: string): Promise<Array<Money | null>> {
+  const { data, error } = await supabase
+    .from("deals")
+    .select("negotiated_value_minor::text, proposal_value_minor::text, currency_code, deal_outcomes(final_value_minor::text, currency_code)")
+    .eq("account_id", accountId)
+    .eq("status", "won")
+    .eq("is_demo", false)
+    .is("deleted_at", null);
+
+  if (error) throw new Error(`listWonOutcomesForAccount failed: ${error.message}`);
+
+  return (data as unknown as RawWonOutcomeRow[]).map((row) => {
+    const finalValueMinor = row.deal_outcomes ? parseMoneyMinor(row.deal_outcomes.final_value_minor) : null;
+    if (finalValueMinor !== null) {
+      return { amountMinor: finalValueMinor, currency: row.deal_outcomes!.currency_code! };
+    }
+    const dealValueMinor = parseMoneyMinor(row.negotiated_value_minor) ?? parseMoneyMinor(row.proposal_value_minor);
+    return dealValueMinor === null ? null : { amountMinor: dealValueMinor, currency: row.currency_code };
   });
 }

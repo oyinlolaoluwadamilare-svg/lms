@@ -96,6 +96,10 @@ export interface StageHistoryEntry {
   isReconstructed: boolean;
 }
 
+export interface AccountStageHistoryEntry extends StageHistoryEntry {
+  dealId: string;
+}
+
 interface StageHistoryRow {
   id: string;
   occurred_at: string;
@@ -138,6 +142,48 @@ export async function listStageEventsForDeal(supabase: SupabaseClient, dealId: s
     }
     return {
       id: row.id,
+      fromStageName: row.from_stage?.name ?? null,
+      toStageName: row.to_stage.name,
+      actorId: row.actor_id,
+      actorName: row.actor?.full_name ?? null,
+      occurredAt: row.occurred_at,
+      durationInPreviousSeconds: row.duration_in_previous_seconds === null ? null : Number(row.duration_in_previous_seconds),
+      isRegression: row.is_regression,
+      isReconstructed: row.is_reconstructed,
+    };
+  });
+}
+
+interface AccountStageHistoryRow extends StageHistoryRow {
+  deal_id: string;
+}
+
+// The batched, cross-deal sibling of listStageEventsForDeal, for Account 360's Merged timeline
+// (M5.8) - the same reasoning src/data/activities.ts's listActivitiesForDeals gives for its own
+// batched sibling: stage_events carries no account_id at all (only deal_id), so an account-level
+// view goes through the account's own deal ids, one call covering all of them.
+export async function listStageEventsForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<AccountStageHistoryEntry[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("stage_events")
+    .select(
+      "id, deal_id, occurred_at, duration_in_previous_seconds::text, is_regression, is_reconstructed, actor_id, " +
+        "from_stage:pipeline_stages!from_stage_id(name), to_stage:pipeline_stages!to_stage_id(name), " +
+        "actor:users!actor_id(full_name)",
+    )
+    .in("deal_id", dealIds)
+    .order("occurred_at", { ascending: false });
+
+  if (error) throw new Error(`listStageEventsForDeals failed: ${error.message}`);
+
+  return (data as unknown as AccountStageHistoryRow[]).map((row) => {
+    if (!row.to_stage) {
+      throw new Error(`stage_events row ${row.id} has no resolvable to_stage (to_stage_id is not-null, but the join returned nothing)`);
+    }
+    return {
+      id: row.id,
+      dealId: row.deal_id,
       fromStageName: row.from_stage?.name ?? null,
       toStageName: row.to_stage.name,
       actorId: row.actor_id,

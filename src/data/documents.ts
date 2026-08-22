@@ -109,6 +109,48 @@ export async function listDocumentsForActivities(
   return byActivity;
 }
 
+export interface AccountDocumentItem extends DocumentListItem {
+  dealId: string;
+}
+
+interface AccountDocumentRow extends DocumentListRow {
+  deal_id: string;
+}
+
+// For Account 360's Documents tab (M5.8). Unlike activities/stage_events, `documents` DOES carry a
+// `deal_id` column that every upload actually sets (`insertDocument`, M3.8) - so this filters on
+// `deal_id` directly, not through `activity_id` the way listDocumentsForActivities does.
+// `documents.account_id` also exists per the domain model but - like `activities.account_id` -
+// has no write path anywhere in this codebase (M3.8's own migration comment already flags this
+// exact gap), so it's not usable as a filter here either; going through the account's own deal ids
+// is the only path that actually returns real rows. Reads through the caller's own RLS-scoped
+// session (documents_select, migration 0010, "inherits deal visibility") - a deal this actor
+// cannot see contributes no documents here either, not an error.
+export async function listDocumentsForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<AccountDocumentItem[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("documents")
+    .select("id, deal_id, activity_id, file_name, mime_type, size_bytes, document_type, created_at, uploaded_by_user:users!uploaded_by(full_name)")
+    .in("deal_id", dealIds)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false });
+
+  if (error) throw new Error(`listDocumentsForDeals failed: ${error.message}`);
+
+  return (data as unknown as AccountDocumentRow[]).map((row) => ({
+    id: row.id,
+    dealId: row.deal_id,
+    activityId: row.activity_id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    documentType: row.document_type,
+    uploadedByName: row.uploaded_by_user?.full_name ?? null,
+    createdAt: row.created_at,
+  }));
+}
+
 export interface DocumentForDownload {
   id: string;
   storagePath: string;

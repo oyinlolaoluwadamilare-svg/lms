@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { can, type Action, type Actor } from "@/auth/permissions";
-import { listPracticeLineIdsForAccount } from "@/data/accounts";
+import { can, type Actor } from "@/auth/permissions";
 import { getContactForAuthorization, insertContact, listActiveContactsForAccount, type Contact } from "@/data/contacts";
 import { countContactsForDeal, DealContactAlreadyLinkedError, insertDealContact, listDealContactsForDeal, type DealContactRow } from "@/data/dealContacts";
 // Re-exported so app/(app) only needs to import from this module - app may not import src/data
@@ -9,23 +8,12 @@ export type { Contact, DealContactRow };
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
 import { getDealForAuthorization } from "@/data/deals";
 import { listOpenStages } from "@/data/pipelineStages";
+// Hoisted to src/services/accounts.ts (M5.8) so both modules share one copy - see that module's
+// own comment for the full reasoning (an account can be entitled to more than one practice line).
+import { actorEntitledToAccount } from "@/services/accounts";
 import { writeAudit } from "@/services/audit";
 import { showsSingleThreadingWarning } from "@/domain/deal";
 import type { DecisionRole } from "@/domain/contact";
-
-// M5.5 (docs/07-build-backlog.md): "`contacts`, `deal_contacts` migrations; primary-contact
-// invariant." An account can be entitled to MORE than one practice line (account_practice_owners is
-// many-to-many, migration 0005's own "practice lines that sell into the same client" reasoning), so
-// contact.create/contact.update's "practice" scope can't be checked with a single can()-Resource
-// call the way a deal's own single practice_line_id can - this checks every practice line the
-// account is entitled to, plus the tenant-wide case (a resource with no practiceLineId only ever
-// satisfies a "tenant" token, never "practice" - see src/auth/permissions.ts's own tokenMatches),
-// mirroring account_has_entitled_practice()'s own set-membership reasoning at the RLS layer.
-async function actorEntitledToAccount(supabase: SupabaseClient, actor: Actor, action: Action, accountId: string): Promise<boolean> {
-  if (can(actor, action, { tenantId: actor.tenantId })) return true;
-  const practiceLineIds = await listPracticeLineIdsForAccount(supabase, accountId);
-  return practiceLineIds.some((practiceLineId) => can(actor, action, { tenantId: actor.tenantId, practiceLineId }));
-}
 
 export interface CreateContactInput {
   accountId: string;

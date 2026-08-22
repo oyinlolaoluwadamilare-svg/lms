@@ -10,7 +10,7 @@ import type { Role } from "../../src/domain/role";
 const ALL_ROLES: readonly Role[] = ["bde", "team_lead", "director", "executive", "tenant_admin"];
 
 describe("NAV_BY_ROLE", () => {
-  it("matches docs/06-ui-spec.md for bde, team_lead, executive and tenant_admin exactly", () => {
+  it("matches docs/06-ui-spec.md for bde, team_lead and tenant_admin exactly", () => {
     expect(NAV_BY_ROLE.bde.map((i) => i.label)).toEqual([
       "My Work",
       "Business Lines",
@@ -27,7 +27,6 @@ describe("NAV_BY_ROLE", () => {
       "Files",
       "Analytics",
     ]);
-    expect(NAV_BY_ROLE.executive.map((i) => i.label)).toEqual(["Dashboard", "Analytics", "Pipeline (read)"]);
     expect(NAV_BY_ROLE.tenant_admin.map((i) => i.label)).toEqual([
       "Dashboard",
       "All Deals",
@@ -35,6 +34,17 @@ describe("NAV_BY_ROLE", () => {
       "Analytics",
       "Admin",
     ]);
+  });
+
+  // M5.8 (docs/07-build-backlog.md: "Account 360 screen") added "Accounts" to Executive's own nav -
+  // docs/06-ui-spec.md's own "Navigation, per role" table lists Executive's nav without it
+  // ("Dashboard · Analytics · Pipeline (read)"), a genuine inconsistency with that same
+  // permission-matrix's own tenant-wide account.view for Executive. Asked via AskUserQuestion and
+  // confirmed by the product owner (src/domain/navigation.ts's own comment on the executive array
+  // has the full reasoning) - this assertion documents the deviation from the table's literal text
+  // rather than silently matching it, the same shape the director/Team assertion below already uses.
+  it("executive's nav includes Accounts (M5.8), a deliberate addition beyond docs/06-ui-spec.md's own table", () => {
+    expect(NAV_BY_ROLE.executive.map((i) => i.label)).toEqual(["Dashboard", "Analytics", "Pipeline (read)", "Accounts"]);
   });
 
   // M4.6 (docs/07-build-backlog.md: "Team view for Team Lead and Director...") added "Team" to

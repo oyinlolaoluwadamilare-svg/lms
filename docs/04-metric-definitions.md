@@ -14,6 +14,14 @@ are excluded from everything.
 with `status = 'active'`, converted to the tenant reporting currency at the current FX rate.
 Excludes unconverted leads, won, lost and soft-deleted deals.
 
+**Won revenue** (D-15, added for Account 360, M5.8). Sum, per won deal, of
+`coalesce(deal_outcomes.final_value_minor, deals.negotiated_value_minor, deals.proposal_value_minor)`
+for deals with `status = 'won'`, converted to the tenant reporting currency at the current FX rate.
+Prefers the value actually recorded at close (`closeDeal`, M5.2) over the deal's own last value,
+since a negotiated value can still move after that value was locked in at close; falls back to the
+deal's value when `final_value_minor` was left blank (it is optional, M5.3). Excludes soft-deleted
+deals.
+
 **Weighted forecast.** Sum of deal value multiplied by probability, where probability is
 `coalesce(probability_override, stage.probability_threshold) / 100`. Computed at query time and
 never stored.

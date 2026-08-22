@@ -11,7 +11,7 @@ import {
   valueBand,
   weightedValue,
 } from "../../src/domain/deal";
-import { formatMoney, parseMoneyMinor, toMajorUnitsString, toMinorUnits } from "../../src/domain/money";
+import { formatMoney, parseMoneyMinor, sumMoneyByCurrency, toMajorUnitsString, toMinorUnits } from "../../src/domain/money";
 
 const STAGE = { probabilityThreshold: 40 };
 
@@ -294,5 +294,41 @@ describe("showsSingleThreadingWarning", () => {
   it("is false past the first open stage once two or more contacts are linked", () => {
     expect(showsSingleThreadingWarning(2, 20, 10)).toBe(false);
     expect(showsSingleThreadingWarning(5, 20, 10)).toBe(false);
+  });
+});
+
+// Account 360's own tiles (M5.8: "open pipeline, won revenue") - sums across several deals that
+// could in principle carry different currencies, with no FX conversion invented (D-08b is still
+// open, and no rate source exists anywhere in this codebase yet).
+describe("sumMoneyByCurrency", () => {
+  it("sums multiple values in the same currency into one entry", () => {
+    expect(
+      sumMoneyByCurrency([
+        { amountMinor: 100n, currency: "NGN" },
+        { amountMinor: 250n, currency: "NGN" },
+      ]),
+    ).toEqual([{ amountMinor: 350n, currency: "NGN" }]);
+  });
+
+  it("skips nulls rather than treating them as zero", () => {
+    expect(sumMoneyByCurrency([{ amountMinor: 100n, currency: "NGN" }, null, null])).toEqual([{ amountMinor: 100n, currency: "NGN" }]);
+  });
+
+  it("returns an empty array for an all-null or empty input, not a zero entry", () => {
+    expect(sumMoneyByCurrency([])).toEqual([]);
+    expect(sumMoneyByCurrency([null, null])).toEqual([]);
+  });
+
+  it("keeps distinct currencies as separate entries, sorted by currency code", () => {
+    expect(
+      sumMoneyByCurrency([
+        { amountMinor: 500n, currency: "USD" },
+        { amountMinor: 100n, currency: "NGN" },
+        { amountMinor: 200n, currency: "NGN" },
+      ]),
+    ).toEqual([
+      { amountMinor: 300n, currency: "NGN" },
+      { amountMinor: 500n, currency: "USD" },
+    ]);
   });
 });

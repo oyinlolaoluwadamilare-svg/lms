@@ -94,3 +94,47 @@ export async function listDealContactsForDeal(supabase: SupabaseClient, dealId: 
     }))
     .sort((a, b) => (a.isPrimary === b.isPrimary ? a.firstName.localeCompare(b.firstName) : a.isPrimary ? -1 : 1));
 }
+
+export interface AccountDealContactRow extends DealContactRow {
+  dealId: string;
+}
+
+interface RawAccountDealContactRow extends RawDealContactRow {
+  deal_id: string;
+}
+
+// For Account 360's Contacts tab (M5.8: "Contacts with decision roles"). A contact can be linked to
+// more than one of the account's own deals, potentially with a different decision_role each time
+// (deal_contacts' own per-deal shape, M5.5) - so unlike the deal-level version, this is keyed by
+// contact_id into a Map of that contact's own links across every deal on the account, not a flat
+// list assuming one role per contact. Batched in one call, the same reasoning
+// listDealContactsForDeal's sibling batched functions (M5.7's listContactsForActivities) already
+// establish for "one related-list fetch, keyed by id."
+export async function listDealContactsForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<Map<string, AccountDealContactRow[]>> {
+  if (dealIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("deal_contacts")
+    .select("deal_id, decision_role, is_primary, contacts(id, first_name, last_name, job_title, last_engaged_at)")
+    .in("deal_id", dealIds);
+
+  if (error) throw new Error(`listDealContactsForDeals failed: ${error.message}`);
+
+  const byContact = new Map<string, AccountDealContactRow[]>();
+  for (const row of data as unknown as RawAccountDealContactRow[]) {
+    const item: AccountDealContactRow = {
+      dealId: row.deal_id,
+      contactId: row.contacts.id,
+      firstName: row.contacts.first_name,
+      lastName: row.contacts.last_name,
+      jobTitle: row.contacts.job_title,
+      lastEngagedAt: row.contacts.last_engaged_at,
+      decisionRole: row.decision_role,
+      isPrimary: row.is_primary,
+    };
+    const existing = byContact.get(item.contactId);
+    if (existing) existing.push(item);
+    else byContact.set(item.contactId, [item]);
+  }
+  return byContact;
+}

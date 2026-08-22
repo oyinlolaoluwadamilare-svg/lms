@@ -2165,6 +2165,109 @@ new), integration (160, 2 new), and manual browser QA of the Log Activity contac
 downstream effects on the timeline and Stakeholders section, against the real hosted project, all
 green.
 
+**M5.8** ("Account 360 screen, showing each practice-line relationship with its own owner (D-03).")
+is pure application/UI layer - no new migration. Everything M5.8 needed at the schema/RLS level
+(`accounts`, `account_practice_owners`, and all four of their policies) already shipped with M1.1's
+migration 0005; D-03 itself explicitly names this milestone as the one it unblocks. `src/services/
+accounts.ts` is a brand new service file (this codebase's first for accounts), and
+`app/(app)/accounts/[id]/page.tsx` replaces a placeholder stub that had sat unbuilt since M1.
+
+**One genuine gap surfaced and resolved before implementation**: docs/02-permission-matrix.md gives
+Executive tenant-wide `account.view`, but neither docs/06-ui-spec.md's own "Navigation, per role"
+table nor this codebase's `NAV_BY_ROLE` gave Executive any route into Accounts at all - the identical
+shape of table/permission mismatch already found and defaulted once before for Director's missing
+"Team" entry (M4.6). Asked via `AskUserQuestion` this time (rather than defaulting unanswered, since
+the question was cheap to ask and the stakes - a whole role's access to a screen - were higher than
+D-13/D-14's own UI-detail-level defaults); the product owner confirmed adding the entry, the same
+resolution the Director precedent already used.
+
+**"Won revenue" needed a real decision, not a default**: `docs/04-metric-definitions.md` defines
+"Open pipeline value" precisely but had no formula at all for "won revenue," which the Account 360
+tile names - asked directly per that file's own "never invent a metric formula" rule instead of
+guessed, unlike D-12's value bands (asked, unanswered, defaulted) or D-13/D-14 (same). The product
+owner confirmed **D-15**: `coalesce(deal_outcomes.final_value_minor, deals.negotiated_value_minor,
+deals.proposal_value_minor)`, summed per won deal - preferring the value actually recorded at close
+over the deal's own last value, falling back to it when no final value was recorded (optional,
+M5.3). `docs/04-metric-definitions.md` gained its own "Won revenue" entry to match. Both tiles return
+`Money[]` (one entry per currency actually present, via a new `sumMoneyByCurrency` domain helper)
+rather than assuming one currency - D-08b (which currencies a tenant may enable) is still open, and
+no FX conversion exists anywhere in this codebase, so silently picking one currency or inventing a
+conversion would both have been worse than being honest about what's actually being summed.
+
+**Two schema/domain-model tensions worth recording, not fixed as bugs**: (1) `docs/06-ui-spec.md`'s
+own Account 360 header line says "...owner" (singular) - a holdover from the pre-D-03 single-owner
+model this line was presumably never updated to pluralize - while `docs/01-domain-model.md`'s own
+`account_practice_owners` entry is unambiguous that Account 360 must show **each** practice-line
+relationship's owner (its own example: "a client sold to by two practice lines has two rows,
+potentially two different owners"). The header renders a list, correctly pluralised in the UI itself
+("Owner"/"Owners" depending on count), not a single field. (2) `activities.account_id` and
+`documents.account_id` both exist per the domain model but have no write path anywhere in this
+codebase (every activity/document is created against a `deal_id` only) - M5.8's Merged timeline and
+Documents tabs both go through the account's own deal ids instead (`listActivitiesForDeals`,
+`listStageEventsForDeals`, `listDocumentsForDeals`, all new batched siblings of their per-deal
+counterparts), the same "don't invent around a column nothing populates" discipline this codebase
+already applied when those columns were first added.
+
+**"Respecting entitlement" (the Deals tab's own words) needed no extra filtering at all.** Every tab
+queries through the caller's own RLS-scoped session, and every underlying table's own policy
+(`deals_select`, `account_practice_owners_select`, `contacts_select`, `deal_contacts_select`,
+`activities_select`, `stage_events_select`, `documents_select`) already scopes its own rows to the
+caller's practice entitlement independently - so a bde entitled to only one of an account's two
+practice lines simply never sees the other one's owner, deals, or engagement, with no service-layer
+filtering required to make that true. `actorEntitledToAccount` (the boolean check M5.5/M5.6/M5.7
+each needed their own copy of) was hoisted out of `src/services/contacts.ts` into this new
+`src/services/accounts.ts` so both modules share one copy, rather than growing a third private copy
+here.
+
+**Read-only, deliberately**: the backlog line says "showing," and neither docs/06-ui-spec.md's
+Account 360 section nor docs/02-permission-matrix.md names any action for reassigning a
+practice-line owner - the same "ship the narrower, clearly-named slice" discipline D-14 already
+applied to `deal_contacts`. Migration 0005's own `account_practice_owners_update` comment
+("reassignment is an update to `owner_id`, not a delete+insert") confirms the RLS is already ready
+for it if a future milestone builds the UI - no new permission action, no migration, just new
+application code this milestone doesn't write.
+
+The four tabs are real tabs, not sections stacked vertically the way the deal detail page's read-only
+skeleton uses elsewhere in this codebase - unlike the "don't build a dropdown menu for two buttons"
+restraint applied there, docs/06-ui-spec.md's own line literally says "Tabs," so a minimal
+client-side `AccountTabs` toggle component was built rather than stacking four sections and calling
+it close enough. The Deals tab reuses the Pipeline Deals list's own `PipelineTable` component
+directly (`account.deals` is exactly a `DealListRow[]`, the same shape `listDeals(supabase, {
+accountId })` already returns) - no new table markup, no new deals query.
+
+An Accounts list page also had to be built (replacing a stub that had said "Accounts and Account 360
+land with M4" since M1) - not a separately-specified screen (nothing in docs/06-ui-spec.md names an
+"Accounts list" screen), but the necessary door into Account 360, since nothing else in this codebase
+links to `/accounts/[id]` yet. Deliberately minimal (name, industry, region, a link) rather than
+duplicating Account 360's own richer detail.
+
+New `tests/unit/deal.spec.ts` coverage (4 new tests) proves `sumMoneyByCurrency`'s exact behaviour:
+same-currency values merge into one entry, nulls are skipped rather than treated as zero, an
+all-null/empty input returns an empty array rather than a zero entry, and distinct currencies stay
+separate, sorted by code. New `tests/integration/account-360.spec.ts` (4 tests, against the real
+hosted project, real signed-in sessions) proves the exact D-03 scenario end to end: one account, two
+practice-line relationships, two different owners, one deal per practice - a bde entitled to only
+Advisory sees only that practice's own owner row, deal and tiles (no won revenue, since the won
+Executive Search deal is RLS-invisible to them); a bde entitled to only Executive Search sees the
+inverse, including D-15's own final-value-preferred-over-deal-value won-revenue formula; an executive
+sees both, tenant-wide; and a bde with no relationship at all to a different account gets a clean
+`null` (not_found), not a partially-populated result. No new RLS tests - no new migration, and
+`accounts`/`account_practice_owners`'s own RLS was already exercised by earlier milestones' test
+files.
+
+Manual browser QA against the real hosted project confirmed the full chain visually for three
+sessions (an Advisory-only bde, an Executive-Search-only bde, and an executive): the header's
+pluralised owner list, all four tiles, all four tabs (including reusing `PipelineTable` correctly),
+tab-switching with no page reload, and - after logging a real activity via the deal detail page - the
+Merged timeline picking it up with the correct deal-name attribution and the "Last engagement" tile
+advancing from "Never engaged" to a real relative date, all without a page refresh triggering it (the
+page had already been reloaded to view the change, same as every other server-rendered screen in
+this codebase).
+
+Verified: typecheck, lint, unit (336, 4 new), RLS (282, unchanged - no new migration this milestone),
+integration (164, 4 new), and manual browser QA of the full Account 360 screen across three sessions,
+against the real hosted project, all green.
+
 ## Commands
 
 ```

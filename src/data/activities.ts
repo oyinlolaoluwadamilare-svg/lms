@@ -117,6 +117,57 @@ export async function listActivitiesForDeal(supabase: SupabaseClient, dealId: st
   }));
 }
 
+export interface AccountActivityItem extends ActivityListItem {
+  dealId: string;
+}
+
+interface AccountActivityRow extends ActivityListRow {
+  deal_id: string;
+}
+
+// For Account 360's Merged timeline (M5.8: "Tabs: ... Merged timeline"). `activities.account_id`
+// exists in the schema per the domain model but has no write path anywhere in this codebase (M3.8's
+// own documents.account_id comment already flags the identical gap for that column) - every
+// activity is created against a deal_id only (src/services/activities.ts's own logActivity), so an
+// account-level view can't filter on `account_id` and must instead go through the account's own
+// deal ids, the same way src/services/engagementTimeline.ts's per-deal version filters on a single
+// dealId. Batched across every deal on the account in one call, the same reasoning
+// listContactsForActivities (M5.7) already established for "one related-list fetch, keyed by id,"
+// just keyed by deal here instead of by activity. `dealId` is carried on each row so the merged
+// timeline can label which deal an entry belongs to - the one thing the per-deal version never
+// needed, since there it was already implied by which page you were on.
+export async function listActivitiesForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<AccountActivityItem[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("activities")
+    .select(
+      "id, deal_id, type, is_client_facing, activity_date, summary, outcome, outcome_disposition, author_id, edit_locked_at, " +
+        "retracted_at, retraction_reason, author:users!author_id(full_name), retracted_by_user:users!retracted_by(full_name)",
+    )
+    .in("deal_id", dealIds)
+    .order("activity_date", { ascending: false });
+
+  if (error) throw new Error(`listActivitiesForDeals failed: ${error.message}`);
+
+  return (data as unknown as AccountActivityRow[]).map((row) => ({
+    id: row.id,
+    dealId: row.deal_id,
+    type: row.type,
+    isClientFacing: row.is_client_facing,
+    activityDate: row.activity_date,
+    summary: row.summary,
+    outcome: row.outcome,
+    outcomeDisposition: row.outcome_disposition,
+    authorId: row.author_id,
+    authorName: row.author?.full_name ?? null,
+    editLockedAt: row.edit_locked_at,
+    retractedAt: row.retracted_at,
+    retractedByName: row.retracted_by_user?.full_name ?? null,
+    retractionReason: row.retraction_reason,
+  }));
+}
+
 export interface ActivityForAuthorization {
   id: string;
   tenantId: string;
