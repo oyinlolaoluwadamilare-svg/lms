@@ -68,8 +68,17 @@ function expectedForDealScoped(entry: PermissionEntry): Record<keyof typeof DEAL
 }
 
 describe("contact permission matrix, exhaustive per role and action", () => {
-  describe("contact.view / contact.create / contact.update - account-scoped, no 'own' token", () => {
-    for (const action of ["contact.view", "contact.create", "contact.update"] as const satisfies readonly Action[]) {
+  // M5.9 (docs/07-build-backlog.md): "Handover panel... shown on owner change." account.
+  // reassign_owner shares contact.view/create/update's exact account-scoped, no-"own"-token shape -
+  // a bde cannot reassign who owns a practice-line relationship any more than they can merge an
+  // account, the same "structurally cannot do this" reasoning deal.change_owner's own comment gives.
+  describe("account.reassign_owner / contact.view / contact.create / contact.update - account-scoped, no 'own' token", () => {
+    for (const action of [
+      "account.reassign_owner",
+      "contact.view",
+      "contact.create",
+      "contact.update",
+    ] as const satisfies readonly Action[]) {
       describe(action, () => {
         for (const role of ROLES) {
           const entry = MATRIX[role][action];
@@ -107,5 +116,13 @@ describe("contact permission matrix, exhaustive per role and action", () => {
     expect(MATRIX.director["contact.link_to_deal"]).toEqual(["practice"]);
     expect(MATRIX.executive["contact.link_to_deal"]).toBeNull();
     expect(MATRIX.tenant_admin["contact.link_to_deal"]).toEqual(["tenant"]);
+  });
+
+  it("mirrors docs/02-permission-matrix.md's account.reassign_owner scope exactly: -/practice/practice/-/tenant", () => {
+    expect(MATRIX.bde["account.reassign_owner"]).toBeNull();
+    expect(MATRIX.team_lead["account.reassign_owner"]).toEqual(["practice"]);
+    expect(MATRIX.director["account.reassign_owner"]).toEqual(["practice"]);
+    expect(MATRIX.executive["account.reassign_owner"]).toBeNull();
+    expect(MATRIX.tenant_admin["account.reassign_owner"]).toEqual(["tenant"]);
   });
 });

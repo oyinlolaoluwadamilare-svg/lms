@@ -24,6 +24,48 @@ export async function listPracticeLineIdsForAccount(supabase: SupabaseClient, ac
   return (data as Array<{ practice_line_id: string }>).map((row) => row.practice_line_id);
 }
 
+export interface AccountForAuthorization {
+  id: string;
+  tenantId: string;
+}
+
+// For reassignAccountPracticeOwner's own can() check (src/services/accounts.ts, M5.9) - just enough
+// to build the Resource's tenantId, the same "one getter, several callers with an identical need"
+// reasoning src/data/deals.ts's getDealForAuthorization and src/data/contacts.ts's
+// getContactForAuthorization already establish. Reads through the CALLER's own RLS-scoped session
+// (accounts_select) - null means either the account doesn't exist or this actor can't see it,
+// deliberately not distinguished, the same not-confirming-existence shape every other not_found
+// case in this codebase already uses.
+export async function getAccountForAuthorization(supabase: SupabaseClient, accountId: string): Promise<AccountForAuthorization | null> {
+  const { data, error } = await supabase.from("accounts").select("id, tenant_id").eq("id", accountId).is("deleted_at", null).maybeSingle();
+
+  if (error) throw new Error(`getAccountForAuthorization failed: ${error.message}`);
+  if (!data) return null;
+
+  const row = data as { id: string; tenant_id: string };
+  return { id: row.id, tenantId: row.tenant_id };
+}
+
+// The only place account_practice_owners.owner_id is written from application code - called
+// exclusively by src/services/accounts.ts's reassignAccountPracticeOwner (M5.9). Mirrors
+// src/data/deals.ts's updateDealOwner exactly - a plain single-column update through the caller's
+// own RLS-scoped session, migration 0005's own account_practice_owners_update policy comment
+// ("reassignment is an update to owner_id, not a delete+insert") already anticipates exactly this.
+export async function updateAccountPracticeOwner(
+  supabase: SupabaseClient,
+  accountId: string,
+  practiceLineId: string,
+  newOwnerId: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from("account_practice_owners")
+    .update({ owner_id: newOwnerId })
+    .eq("account_id", accountId)
+    .eq("practice_line_id", practiceLineId);
+
+  if (error) throw new Error(`updateAccountPracticeOwner failed: ${error.message}`);
+}
+
 export interface AccountListItem {
   id: string;
   name: string;

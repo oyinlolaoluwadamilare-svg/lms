@@ -110,6 +110,7 @@ named by this milestone, the same "not invented here" reasoning migration 0005's
 | account.view | practice | practice | practice | tenant | tenant |
 | account.create / update | practice | practice | practice | — | tenant |
 | account.merge | — | — | — | — | tenant |
+| account.reassign_owner | — | practice | practice | — | tenant |
 | contact.view | practice | practice | practice | tenant | tenant |
 | contact.create / update | practice | practice | practice | — | tenant |
 | contact.link_to_deal | own | practice | practice | — | tenant |

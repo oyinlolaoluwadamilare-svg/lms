@@ -2225,7 +2225,9 @@ practice-line owner - the same "ship the narrower, clearly-named slice" discipli
 applied to `deal_contacts`. Migration 0005's own `account_practice_owners_update` comment
 ("reassignment is an update to `owner_id`, not a delete+insert") confirms the RLS is already ready
 for it if a future milestone builds the UI - no new permission action, no migration, just new
-application code this milestone doesn't write.
+application code this milestone doesn't write. (M5.9 was that future milestone - see below: a new
+`account.reassign_owner` action and a "Reassign" trigger per practice-line-owner chip, no migration
+needed, exactly as anticipated here.)
 
 The four tabs are real tabs, not sections stacked vertically the way the deal detail page's read-only
 skeleton uses elsewhere in this codebase - unlike the "don't build a dropdown menu for two buttons"
@@ -2267,6 +2269,124 @@ this codebase).
 Verified: typecheck, lint, unit (336, 4 new), RLS (282, unchanged - no new migration this milestone),
 integration (164, 4 new), and manual browser QA of the full Account 360 screen across three sessions,
 against the real hosted project, all green.
+
+**M5.9** ("Handover panel: last ten engagements, open tasks and contacts, shown on owner change.") is
+the last item in Milestone 5, and the one with the least to build on: no docs/06-ui-spec.md section
+names this screen at all, and nothing in the codebase wrote to `deals.owner_id` or
+`account_practice_owners.owner_id` anywhere before this milestone - "owner change" was a trigger event
+the backlog line assumed already existed. Three genuine scoping questions, asked directly via
+`AskUserQuestion` rather than defaulted (the same bar M5.8's Executive-nav gap and D-15 used, not
+D-12/D-13/D-14's "ask, get no answer, default and flag" precedent - all three were answered in the
+same turn): (1) does "owner change" mean the deal's own owner, an account's per-practice-line owner
+(D-03), or both - the product owner chose **both**; (2) since neither trigger exists yet, should this
+milestone build them (`changeDealOwner`/`reassignAccountPracticeOwner`) alongside the panel, or ship
+the panel alone for some future trigger to call - the product owner chose to **build both**; (3) does
+"last ten engagements" mean the existing merged activities-plus-stage-events Engagement timeline
+(M5.6/M5.7) or activities alone - the product owner chose the **merged timeline, last 10 entries**.
+
+**This milestone closes a gap `tests/rls/deals_permission_matrix.spec.ts` had already documented
+against itself.** That file's own comment states a bde can reassign `owner_id` on their own deal via a
+raw update, because `deals_update`'s RLS policy has no per-column concept of "changing the owner" -
+it only sees "an update to a row this bde owns," which permission is real by design (D-02's own
+practice-wide-read/own-write shape). No service function called `can()` against a narrower rule for
+this one column before today, so the gap sat open but harmless (nothing wrote to `owner_id` at all).
+`changeDealOwner` and the new `reassignAccountPracticeOwner` are exactly the functions that close it:
+both perform their own explicit `can()` check against a new, column-specific permission action before
+ever writing, the same "RLS coarse, service precise" split this codebase has relied on since M2.1's
+own deal-scope tests. `tests/integration/handover.spec.ts` proves the closure directly, not just that
+the function returns denied: a bde's denied attempt asserts the underlying `owner_id` column is
+**unchanged** in the database afterward, ruling out a service that returns the right error while
+still leaking a write through some other path.
+
+**A new permission action, scoped per docs/02-permission-matrix.md's existing shape.**
+`account.reassign_owner` (`-/practice/practice/-/tenant` - identical to `deal.change_owner`'s own
+existing scope, which M0.4's original permission matrix already defined and left unused until today)
+was added rather than
+overloading `account.update`, since a plain `account.update` grant says nothing about who owns a
+practice-line relationship, the same reasoning that kept `deal.change_owner` a distinct action from
+`deal.update` from the start.
+
+**Deliberately narrower than Account 360's own contact list.** `getHandoverSummary`'s contacts are
+only those actually linked (`deal_contacts`) to one of the deals in scope - one deal for
+`changeDealOwner`, every deal the account has in one practice line for
+`reassignAccountPracticeOwner` - not every contact M5.8's `getAccount360` would show for the whole
+account. A handover is about who the incoming owner needs to talk to about *this* relationship, not
+the account's full contact book, some of which may belong to a different practice line's deals
+entirely. The same function serves both call sites unmodified: it takes a plain `dealIds: string[]`
+and a `dealNameById` map, so a single-deal reassignment and a whole-practice-line reassignment are the
+same shape of call with a different-length array, not two parallel implementations.
+
+**Who sees the panel, and a notification this milestone deliberately does not wire up.** The reference
+PRD's own FR-3.5 describes the handover panel as something the *incoming* owner sees; that isn't how
+this permission model can work, since `deal.change_owner`/`account.reassign_owner` have no `own`
+scope - a bde, who would typically be the person receiving a reassigned deal, can never be the one
+performing it, and nothing in this codebase gives an incoming owner an inbox to see the panel through
+later (`docs/01-domain-model.md`'s own `deal_reassigned` notification type is named in the
+vocabulary but `src/services/notifications.ts`'s own comment confirms it was deliberately left
+unimplemented). So the panel is shown, in the same modal, to the person who just performed the
+reassignment - a team_lead, director or tenant_admin - immediately after their write succeeds. This is
+an implementation-level interpretation of an ambiguous spec line, not an open business-rule question
+recorded in docs/DECISIONS.md's Part A: it's disclosed here and in `ChangeOwnerModal.tsx`'s own header
+comment, the same "flag it prominently, don't just silently pick one" treatment M5.8 gave its own
+tab-vs-section UI call, rather than a formal D-numbered entry like D-15's actual metric-formula
+question.
+
+**No persisted ownership-history ledger.** A future milestone could plausibly want "who owned this
+before, and when did it change" as a browsable history, not just a point-in-time panel - the Explore
+research pass that scoped this milestone flagged it as a natural but unrequested expansion. Nothing in
+docs asks for one, and the panel is only ever shown at the moment of reassignment, not as a
+historical browse-back feature, so the existing `audit_entries` row (`deal.change_owner`/
+`account.reassign_owner`, before/after `ownerId`) is the only record kept - consistent with this
+codebase's standing discipline against building a control with nothing real behind it.
+
+**The UI**: `ChangeOwnerModal` (deal detail page) and `ReassignOwnerModal` (Account 360, rendered per
+practice-line-owner chip so a team_lead only sees the trigger on rows their own grant actually covers)
+are both two-step client modals sharing one `HandoverPanel` presentational component
+(`app/(app)/deals/[id]/HandoverPanel.tsx`, cross-imported into the accounts directory the same way
+M5.8 already cross-imports `PipelineTable`): step one picks a new owner from a practice-scoped,
+current-owner-excluded picker (`listAssignableUsersForPractice`, reused from M4's task-assignment
+work); step two, reachable only after a successful write, replaces the picker with the handover
+summary and a "Done" button that refreshes the page. No new migration - migration 0005's own
+`deals_update`/`account_practice_owners_update` policies were already correctly shaped for this
+(the account one's own comment already said "reassignment is an update to `owner_id`, not a
+delete+insert"), so this milestone is application layer only, the same shape M5.8 was.
+
+New `tests/permissions/contact-matrix.spec.ts` coverage (6 new tests) proves `account.reassign_owner`'s
+exact scope, both the shared account-scoped-action loop and a dedicated test mirroring
+docs/02-permission-matrix.md's row verbatim. New `tests/integration/handover.spec.ts` (6 tests,
+against the real hosted project, real signed-in sessions) proves both `changeDealOwner` and
+`reassignAccountPracticeOwner` end to end: a bde is denied for both (asserting the underlying column
+is unchanged, not just the returned error code); a bde outside the deal's practice can't even see it
+(`not_found`); a team_lead succeeds at both, with the returned `HandoverSummary` proven to contain the
+fixture's own seeded activity, open task and linked contact, and exactly one new `audit_entries` row
+written by the correct actor; and reassigning to the already-current owner is rejected
+(`same_owner`). Audit-row assertions use the same delta-not-exact-length pattern
+`tests/integration/close-deal.spec.ts` already established (count before, assert `count after == count
+before + 1`) rather than asserting a bare `toHaveLength(1)`, since this fixture's tenant/deal/account
+rows are a find-or-create fixture whose audit history correctly accumulates across every real run
+against the hosted project (CLAUDE.md #4's append-only rule) - the first version of this file asserted
+the bare count and failed the moment it was run twice.
+
+Manual browser QA against the real hosted project confirmed both flows visually, in real signed-in
+sessions: a team_lead's "Change Owner" button on the deal detail page opens the two-step modal, picks
+a new owner from a picker correctly excluding the current one, and the handover panel that replaces it
+shows the fixture's own real engagement, open task and contact - all without a page reload - before
+"Done" refreshes the page to show the new owner in the Details card; the identical flow, scoped to one
+account practice line's own deals, works the same way from Account 360's per-practice-line "Reassign"
+trigger; and a plain bde signed into either screen sees neither trigger at all, matching
+`account.reassign_owner`/`deal.change_owner`'s own denied grant for that role.
+
+Verified: typecheck, lint, unit/permission/layering (342, 6 new), RLS (282, unchanged - no new
+migration this milestone), integration (170, 6 new), and manual browser QA of both owner-change flows
+and their shared handover panel across a team_lead and a plain bde session, against the real hosted
+project, all green.
+
+**Milestone 5 is complete.** Every exit criterion the milestone opened with now holds end to end:
+nothing closes without a recorded reason (M5.1-M5.3), deals carry a real stakeholder map with
+decision roles and a single-threading warning (M5.5-M5.7), and relationships survive a turnover -
+both a deal's own owner and an account's per-practice-line owner can be reassigned, with a real
+handover summary shown at the moment it happens, and the change and its "why" are all captured in
+`audit_entries` (M5.9). The next backlog milestone is M6 ("Analytics rebuilt on events").
 
 ## Commands
 

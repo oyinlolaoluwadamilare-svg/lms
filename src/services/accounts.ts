@@ -2,9 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Action, type Actor } from "@/auth/permissions";
 import {
   getAccountDetail,
+  getAccountForAuthorization,
   listAccountsForDirectory as dataListAccountsForDirectory,
   listPracticeLineIdsForAccount,
   listPracticeLineOwnersForAccount,
+  updateAccountPracticeOwner,
   type AccountListItem,
   type AccountPracticeOwner,
 } from "@/data/accounts";
@@ -18,7 +20,13 @@ import { listWonOutcomesForAccount } from "@/data/dealOutcomes";
 import { listDeals, type DealListRow } from "@/data/deals";
 import { listDocumentsForDeals, type AccountDocumentItem } from "@/data/documents";
 import { listStageEventsForDeals, type AccountStageHistoryEntry } from "@/data/stageEvents";
+import { getUserByAuthId, listAssignableUsersForPractice, type AssignableUser } from "@/data/users";
+// Re-exported so app/(app) only needs to import from this module - app may not import src/data
+// directly (eslint.config.mjs boundaries), including for types.
+export type { AssignableUser };
 import { sumMoneyByCurrency, type Money } from "@/domain/money";
+import { writeAudit } from "@/services/audit";
+import { getHandoverSummary, type HandoverSummary } from "@/services/handover";
 
 // M5.5 (docs/07-build-backlog.md): "`contacts`, `deal_contacts` migrations; primary-contact
 // invariant." Hoisted out of src/services/contacts.ts (M5.8) so both that module and this one share
@@ -83,14 +91,16 @@ export interface Account360 {
 // engagement across the account. Tabs: Deals (across practice lines, respecting entitlement),
 // Contacts with decision roles, Merged timeline, Documents."
 //
-// Read-only, deliberately: the backlog line says "showing," and neither this ui-spec section nor
-// docs/02-permission-matrix.md names any action for reassigning a practice-line owner - the same
-// "ship the narrower, clearly-named slice" discipline D-14 already applied to deal_contacts.
-// Reassignment, if a future milestone needs it, would ride on `account.update` (migration 0005's
-// own `account_practice_owners_update` comment: "reassignment is an update to owner_id, not a
-// delete+insert") - not a new permission action, but still new UI this milestone doesn't build.
+// Was read-only through M5.8, deliberately - the backlog line said "showing," and neither this
+// ui-spec section nor docs/02-permission-matrix.md named any action for reassigning a
+// practice-line owner at the time, the same "ship the narrower, clearly-named slice" discipline
+// D-14 already applied to deal_contacts. M5.9 ("Handover panel... shown on owner change") is the
+// milestone that actually needs it - see reassignAccountPracticeOwner below, which adds the new
+// `account.reassign_owner` permission action this file's own M5.8 comment predicted migration
+// 0005's `account_practice_owners_update` policy was "already ready for" (its own comment:
+// "reassignment is an update to owner_id, not a delete+insert").
 //
-// No separate can() check here beyond RLS: reads through the CALLER's own RLS-scoped session
+// No separate can() check here beyond RLS for the read side: reads through the CALLER's own RLS-scoped session
 // throughout, the same "no separate can() check for viewing" convention getDealDetail/
 // getEngagementTimeline already establish - accounts_select (migration 0005) is the only
 // authorisation boundary for the header/tiles, and every tab's own table (deals_select,
@@ -176,4 +186,113 @@ export async function getAccount360(supabase: SupabaseClient, accountId: string,
     timeline,
     documents,
   };
+}
+
+// For Account 360 to decide whether to show a "Reassign" trigger on a given practice-line owner
+// row (M5.9) - mirrors src/services/deals.ts's canChangeDealOwner shape exactly. Checked per
+// practiceLineId, not once for the whole account: a team_lead/director's own account.
+// reassign_owner grant is practice-scoped, so they may be able to reassign the Advisory
+// relationship's owner but not the Executive Search one on the very same account (D-03's own
+// "potentially two different owners" shape applies just as much to who may CHANGE each owner as to
+// who the owners currently are).
+export async function canReassignAccountPracticeOwner(supabase: SupabaseClient, actor: Actor, accountId: string, practiceLineId: string): Promise<boolean> {
+  const account = await getAccountForAuthorization(supabase, accountId);
+  if (!account) return false;
+
+  return can(actor, "account.reassign_owner", { tenantId: account.tenantId, practiceLineId });
+}
+
+export interface ReassignOwnerContext {
+  canReassign: boolean;
+  assignableOwners: AssignableUser[];
+}
+
+// For Account 360's own practice-line-owner rows to decide whether to show a "Reassign" trigger
+// per row, and if so, what to populate its scope-filtered owner picker with - the same bundled
+// boolean-plus-picker-data shape src/services/deals.ts's getChangeOwnerContext already establishes,
+// called once per practice-line owner row rather than once for the whole account, since
+// account.reassign_owner's own grant is scoped per practiceLineId (canReassignAccountPracticeOwner's
+// own comment explains why). currentOwnerId is excluded from the picker for the same "reassigning
+// to the current owner isn't a reassignment" reason getChangeOwnerContext already gives.
+export async function getReassignOwnerContext(
+  supabase: SupabaseClient,
+  actor: Actor,
+  accountId: string,
+  practiceLineId: string,
+  currentOwnerId: string,
+): Promise<ReassignOwnerContext> {
+  const canReassign = await canReassignAccountPracticeOwner(supabase, actor, accountId, practiceLineId);
+  if (!canReassign) return { canReassign: false, assignableOwners: [] };
+
+  const eligibleOwners = await listAssignableUsersForPractice(supabase, actor.tenantId, practiceLineId);
+  return { canReassign: true, assignableOwners: eligibleOwners.filter((u) => u.id !== currentOwnerId) };
+}
+
+export type ReassignAccountPracticeOwnerResult =
+  | { ok: true; handover: HandoverSummary }
+  | { ok: false; code: "not_found" | "denied" | "same_owner" | "invalid_owner" };
+
+// The single path for reassigning a practice-line relationship's owner (docs/07-build-backlog.md
+// M5.9: "Handover panel... shown on owner change"). Mirrors changeDealOwner's exact validation
+// shape (src/services/deals.ts) - same_owner before the real-user check, then the business-scope
+// re-check against this specific practice line's own assignable users.
+//
+// The handover summary here spans EVERY deal the account has in THIS one practice line, not just
+// one deal - a practice-line relationship handover is about everything that relationship covers
+// (docs/01-domain-model.md's own account_practice_owners example: "a client sold to by two
+// practice lines has two rows, potentially two different owners" - reassigning one of those rows
+// hands off that practice's whole slice of the relationship, not a single deal within it).
+export async function reassignAccountPracticeOwner(
+  supabase: SupabaseClient,
+  actor: Actor,
+  accountId: string,
+  practiceLineId: string,
+  newOwnerId: string,
+  timezone: string,
+): Promise<ReassignAccountPracticeOwnerResult> {
+  const account = await getAccountForAuthorization(supabase, accountId);
+  if (!account) return { ok: false, code: "not_found" };
+
+  if (!can(actor, "account.reassign_owner", { tenantId: account.tenantId, practiceLineId })) {
+    return { ok: false, code: "denied" };
+  }
+
+  const owners = await listPracticeLineOwnersForAccount(supabase, accountId);
+  const current = owners.find((o) => o.practiceLineId === practiceLineId);
+  if (!current) return { ok: false, code: "not_found" };
+
+  if (newOwnerId === current.ownerId) return { ok: false, code: "same_owner" };
+
+  const newOwner = await getUserByAuthId(supabase, newOwnerId);
+  if (!newOwner || newOwner.tenantId !== account.tenantId) {
+    return { ok: false, code: "invalid_owner" };
+  }
+
+  const eligibleOwners = await listAssignableUsersForPractice(supabase, account.tenantId, practiceLineId);
+  if (!eligibleOwners.some((user) => user.id === newOwnerId)) {
+    return { ok: false, code: "invalid_owner" };
+  }
+
+  const previousOwnerId = current.ownerId;
+  await updateAccountPracticeOwner(supabase, accountId, practiceLineId, newOwnerId);
+
+  await writeAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.id,
+    entityType: "account",
+    entityId: accountId,
+    action: "account.reassign_owner",
+    before: { practiceLineId, ownerId: previousOwnerId },
+    after: { practiceLineId, ownerId: newOwnerId },
+  });
+
+  const practiceDeals = await listDeals(supabase, { accountId, practiceLineId }, timezone);
+  const dealNameById = new Map(practiceDeals.map((d) => [d.id, d.name]));
+  const handover = await getHandoverSummary(
+    supabase,
+    practiceDeals.map((d) => d.id),
+    dealNameById,
+  );
+
+  return { ok: true, handover };
 }

@@ -1,0 +1,167 @@
+"use client";
+
+import { useId, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { AssignableUser } from "@/services/deals";
+import type { HandoverSummary } from "@/services/handover";
+import { changeDealOwnerAction } from "./changeOwnerActions";
+import { HandoverPanel } from "./HandoverPanel";
+
+// M5.9 (docs/07-build-backlog.md): "Handover panel: last ten engagements, open tasks and contacts,
+// shown on owner change." A two-step modal, not a plain confirm-and-close one like its sibling
+// modals in this directory: step 1 picks the new owner, step 2 (only reachable after a successful
+// reassignment) shows the handover summary the backlog line itself names - the person doing the
+// reassignment (a team_lead/director/tenant_admin, never the incoming bde: deal.change_owner has
+// no "own" scope) is who sees it, since nothing in this codebase has a notification inbox the
+// incoming owner would see it through instead (docs/01-domain-model.md's own "deal_reassigned"
+// notification vocabulary is named but deliberately unimplemented - src/services/notifications.ts's
+// own comment). Rendered as a plain trigger button, the same boolean-gated-visibility shape every
+// other role-conditional modal in this codebase already uses.
+export function ChangeOwnerModal({
+  dealId,
+  timezone,
+  assignableOwners,
+}: {
+  dealId: string;
+  timezone: string;
+  assignableOwners: AssignableUser[];
+}) {
+  const router = useRouter();
+  const idPrefix = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const ownerRef = useRef<HTMLSelectElement>(null);
+
+  const [newOwnerId, setNewOwnerId] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [handover, setHandover] = useState<HandoverSummary | null>(null);
+
+  function openModal() {
+    setNewOwnerId(assignableOwners[0]?.id ?? "");
+    setError(null);
+    setHandover(null);
+    dialogRef.current?.showModal();
+    requestAnimationFrame(() => ownerRef.current?.focus());
+  }
+
+  function closeModal() {
+    dialogRef.current?.close();
+    if (handover) router.refresh();
+  }
+
+  async function handleSave() {
+    if (pending) return;
+    if (!newOwnerId) {
+      setError("Select a new owner");
+      return;
+    }
+    setPending(true);
+    setError(null);
+
+    const result = await changeDealOwnerAction(dealId, { newOwnerId });
+
+    setPending(false);
+    if (!result.ok) {
+      setError(result.message);
+      return;
+    }
+    setHandover(result.handover);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter" && !handover) {
+      e.preventDefault();
+      void handleSave();
+    }
+    if (e.key === "Escape") {
+      closeModal();
+    }
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={openModal}
+        className="rounded-token border border-line px-3 py-1.5 text-sm font-medium text-ink outline-none hover:bg-surface focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        Change Owner
+      </button>
+
+      <dialog
+        ref={dialogRef}
+        onKeyDown={handleKeyDown}
+        className="w-full max-w-lg rounded-token border border-line bg-surface p-0 text-ink backdrop:bg-ink/40"
+      >
+        <form method="dialog" onSubmit={(e) => e.preventDefault()} className="flex max-h-[85vh] flex-col gap-4 overflow-y-auto p-6">
+          {handover ? (
+            <>
+              <h2 className="text-sm font-semibold text-ink">Owner changed - handover summary</h2>
+              <HandoverPanel summary={handover} timezone={timezone} />
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  Done
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <h2 className="text-sm font-semibold text-ink">Change owner</h2>
+
+              {assignableOwners.length === 0 ? (
+                <p className="text-sm text-muted">No other eligible owner is available in this practice line.</p>
+              ) : (
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor={`${idPrefix}-newOwnerId`} className="text-sm font-medium text-ink">
+                    New owner
+                  </label>
+                  <select
+                    id={`${idPrefix}-newOwnerId`}
+                    ref={ownerRef}
+                    value={newOwnerId}
+                    onChange={(e) => setNewOwnerId(e.target.value)}
+                    className="rounded-token border border-line bg-surface px-3 py-2 text-ink outline-none focus:ring-2 focus:ring-accent"
+                  >
+                    {assignableOwners.map((user) => (
+                      <option key={user.id} value={user.id}>
+                        {user.fullName}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {error ? (
+                <p role="alert" aria-live="polite" className="text-sm text-lost">
+                  {error}
+                </p>
+              ) : null}
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={pending || assignableOwners.length === 0}
+                  className="rounded-token bg-accent px-4 py-2 text-sm font-medium text-surface outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60"
+                >
+                  {pending ? "Saving…" : "Change owner"}
+                </button>
+                <button
+                  type="button"
+                  onClick={closeModal}
+                  className="rounded-token border border-line px-4 py-2 text-sm font-medium text-ink outline-none hover:bg-raised focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
+        </form>
+      </dialog>
+    </>
+  );
+}

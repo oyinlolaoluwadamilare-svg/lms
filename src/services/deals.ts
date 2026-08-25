@@ -2,6 +2,11 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { can, type Actor } from "@/auth/permissions";
 import { listAccounts } from "@/data/accounts";
 import { listDealCoOwnerIds } from "@/data/dealCoOwners";
+import { getUserByAuthId, listAssignableUsersForPractice, type AssignableUser } from "@/data/users";
+// Re-exported so app/(app) only needs to import from this module - app may not import src/data
+// directly (eslint.config.mjs boundaries), including for types.
+export type { AssignableUser };
+import { getHandoverSummary, type HandoverSummary } from "@/services/handover";
 import {
   applyDealEdit,
   countDealsWithoutNextAction,
@@ -12,6 +17,7 @@ import {
   insertDeal,
   listDeals,
   nextDealReference,
+  updateDealOwner,
   updateDealStage,
   type DealDetail,
   type DealEditFields,
@@ -268,6 +274,87 @@ export async function changeStage(
   });
 
   return { ok: true };
+}
+
+export interface ChangeOwnerContext {
+  canChangeOwner: boolean;
+  assignableOwners: AssignableUser[];
+}
+
+// For the deal detail page to decide whether to show the "Change Owner" trigger, and if so, what
+// to populate its scope-filtered owner picker with - one round trip, the same bundled-boolean-plus-
+// picker-data shape getAddTaskContext already establishes (src/services/tasks.ts). The current
+// owner is excluded from the picker - reassigning a deal to its own current owner isn't a
+// reassignment, the same "same_owner" case changeDealOwner itself rejects below.
+export async function getChangeOwnerContext(supabase: SupabaseClient, actor: Actor, dealId: string): Promise<ChangeOwnerContext> {
+  const deal = await getDealForAuthorization(supabase, dealId);
+  if (!deal) return { canChangeOwner: false, assignableOwners: [] };
+
+  const canChangeOwner = can(actor, "deal.change_owner", { tenantId: deal.tenantId, practiceLineId: deal.practiceLineId });
+  if (!canChangeOwner) return { canChangeOwner: false, assignableOwners: [] };
+
+  const eligibleOwners = await listAssignableUsersForPractice(supabase, deal.tenantId, deal.practiceLineId);
+  return { canChangeOwner: true, assignableOwners: eligibleOwners.filter((u) => u.id !== deal.ownerId) };
+}
+
+export type ChangeDealOwnerResult =
+  | { ok: true; handover: HandoverSummary }
+  | { ok: false; code: "not_found" | "denied" | "same_owner" | "invalid_owner" };
+
+// The single path for changing a deal's owner (docs/07-build-backlog.md M5.9: "Handover panel...
+// shown on owner change"). No "own" token in deal.change_owner's own scope (docs/02-permission-
+// matrix.md: -/practice/practice/-/tenant) - a bde cannot reassign a deal's owner even if it's
+// their own deal, the same reasoning updateDeal's own comment already gives for treating owner as
+// structurally out of plain deal.update's reach. The resource passed to can() is therefore just
+// {tenantId, practiceLineId}, not the own/authorId/coOwnerIds shape changeStage/logActivity build -
+// there is no "own" case here to match against.
+//
+// Mirrors assignTask's exact validation shape (src/services/tasks.ts): same_owner before the
+// real-user check (a bogus id could never be "the same owner" OR "a different one" - it isn't
+// anyone), then a data-integrity check (real, same-tenant user) before the business-scope
+// re-check (actually eligible in this deal's own practice) - a cross-tenant or nonexistent id is a
+// different kind of wrong than a real user in the wrong practice, and the result codes say so.
+//
+// On success, returns the M5.9 handover summary for this one deal directly - the caller (the
+// Change Owner modal) needs it immediately to show "what's being handed off," not as a second
+// round trip. Known gap, same tier every compound write in this Supabase-client architecture
+// already accepts: the owner update and the audit write are two separate calls, not one
+// transaction.
+export async function changeDealOwner(supabase: SupabaseClient, actor: Actor, dealId: string, newOwnerId: string): Promise<ChangeDealOwnerResult> {
+  const deal = await getDealForAuthorization(supabase, dealId);
+  if (!deal) return { ok: false, code: "not_found" };
+
+  if (!can(actor, "deal.change_owner", { tenantId: deal.tenantId, practiceLineId: deal.practiceLineId })) {
+    return { ok: false, code: "denied" };
+  }
+
+  if (newOwnerId === deal.ownerId) return { ok: false, code: "same_owner" };
+
+  const newOwner = await getUserByAuthId(supabase, newOwnerId);
+  if (!newOwner || newOwner.tenantId !== deal.tenantId) {
+    return { ok: false, code: "invalid_owner" };
+  }
+
+  const eligibleOwners = await listAssignableUsersForPractice(supabase, deal.tenantId, deal.practiceLineId);
+  if (!eligibleOwners.some((user) => user.id === newOwnerId)) {
+    return { ok: false, code: "invalid_owner" };
+  }
+
+  const previousOwnerId = deal.ownerId;
+  await updateDealOwner(supabase, dealId, newOwnerId);
+
+  await writeAudit({
+    tenantId: actor.tenantId,
+    actorId: actor.id,
+    entityType: "deal",
+    entityId: dealId,
+    action: "deal.change_owner",
+    before: { ownerId: previousOwnerId },
+    after: { ownerId: newOwnerId },
+  });
+
+  const handover = await getHandoverSummary(supabase, [dealId], new Map([[dealId, deal.name]]));
+  return { ok: true, handover };
 }
 
 export interface CloseDealInput {

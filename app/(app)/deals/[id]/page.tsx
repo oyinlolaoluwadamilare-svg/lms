@@ -3,7 +3,7 @@ import { formatMoney } from "@/domain/money";
 import { ACTIVITY_TYPE_LABELS } from "@/domain/activity";
 import { formatLastEngaged, stalenessBand, type StalenessBand } from "@/domain/deal";
 import { formatDateInTimezone, formatDurationSeconds, formatPlainDate } from "@/lib/dates";
-import { getCloseDealAvailability, getDealDetail, getDealForEditView } from "@/services/deals";
+import { getChangeOwnerContext, getCloseDealAvailability, getDealDetail, getDealForEditView } from "@/services/deals";
 import { getSessionActor } from "@/services/actor";
 import { canLogActivity, canRetractActivity } from "@/services/activities";
 import { getActiveOutcomeReasons } from "@/services/outcomeReasons";
@@ -18,6 +18,7 @@ import { checkRouteAccess } from "../../_access";
 import { AddContactModal } from "./AddContactModal";
 import { AddTaskModal } from "./AddTaskModal";
 import { AttachmentLink } from "./AttachmentLink";
+import { ChangeOwnerModal } from "./ChangeOwnerModal";
 import { EditActivityModal } from "./EditActivityModal";
 import { LogActivityModal } from "./LogActivityModal";
 import { MarkLostModal } from "./MarkLostModal";
@@ -67,17 +68,19 @@ export default async function DealDetailPage({
   // engagement timeline reads through the same session (activities_select/stage_events_select) -
   // if the deal itself is invisible to this actor, this comes back empty rather than erroring,
   // which the early return below makes moot anyway.
-  const [deal, editView, timeline, canLog, canRetract, addTaskContext, closeAvailability, winReasons, lossReasons] = await Promise.all([
-    getDealDetail(supabase, id, timezone),
-    session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
-    getEngagementTimeline(supabase, id, timelineFilters),
-    session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
-    session.status === "active" ? canRetractActivity(supabase, session.actor, id) : false,
-    session.status === "active" ? getAddTaskContext(supabase, session.actor, id) : { canAddTask: false, assignableUsers: [] },
-    session.status === "active" ? getCloseDealAvailability(supabase, session.actor, id) : { canMarkWon: false, canMarkLost: false },
-    session.status === "active" ? getActiveOutcomeReasons(supabase, session.actor.tenantId, "win") : [],
-    session.status === "active" ? getActiveOutcomeReasons(supabase, session.actor.tenantId, "loss") : [],
-  ]);
+  const [deal, editView, timeline, canLog, canRetract, addTaskContext, closeAvailability, winReasons, lossReasons, changeOwnerContext] =
+    await Promise.all([
+      getDealDetail(supabase, id, timezone),
+      session.status === "active" ? getDealForEditView(supabase, session.actor, id) : null,
+      getEngagementTimeline(supabase, id, timelineFilters),
+      session.status === "active" ? canLogActivity(supabase, session.actor, id) : false,
+      session.status === "active" ? canRetractActivity(supabase, session.actor, id) : false,
+      session.status === "active" ? getAddTaskContext(supabase, session.actor, id) : { canAddTask: false, assignableUsers: [] },
+      session.status === "active" ? getCloseDealAvailability(supabase, session.actor, id) : { canMarkWon: false, canMarkLost: false },
+      session.status === "active" ? getActiveOutcomeReasons(supabase, session.actor.tenantId, "win") : [],
+      session.status === "active" ? getActiveOutcomeReasons(supabase, session.actor.tenantId, "loss") : [],
+      session.status === "active" ? getChangeOwnerContext(supabase, session.actor, id) : { canChangeOwner: false, assignableOwners: [] },
+    ]);
   const currentActorId = session.status === "active" ? session.actor.id : null;
 
   if (!deal) {
@@ -149,6 +152,9 @@ export default async function DealDetailPage({
             {contactsSection.canAddContact ? (
               <AddContactModal dealId={deal.id} accountId={deal.account.id} availableContacts={contactsSection.availableContacts} />
             ) : null}
+            {changeOwnerContext.canChangeOwner ? (
+              <ChangeOwnerModal dealId={deal.id} timezone={timezone} assignableOwners={changeOwnerContext.assignableOwners} />
+            ) : null}
           </div>
         </div>
         <p className="text-sm text-muted">{deal.account.name}</p>
@@ -159,16 +165,16 @@ export default async function DealDetailPage({
           milestone that builds My Work's own inline-complete interaction this list would otherwise
           duplicate ahead of time). Log Activity (M3.4), Add Task (M4.3), the next-action strip
           (M4.4), Edit Deal (M1.7), Mark Won/Lost (M5.3), the last-engaged chip (M3.7),
-          Stakeholders/Add Contact (M5.6) and contact attribution (M5.7) are what now exist; Advance
-          Stage and Escalate are still missing (M2.2's board drag already moves stage; Escalate is
-          M5+). Mark Won/Lost/Add Contact render as plain buttons, not "under a menu" the way
-          docs/06-ui-spec.md's own line names it - Escalate doesn't exist yet either, and this
-          codebase has no dropdown-menu primitive; building one for a handful of buttons ahead of
-          Escalate actually needing it would be premature abstraction (CLAUDE.md #6). The engagement
-          timeline below (M3.5/M3.6) supersedes M2.4's narrower stage-history-only panel, merging it
-          with the activities this modal writes and, since M5.7, the contacts attributed to them.
-          Otherwise this is the same read-only skeleton docs/07-build-backlog.md M1.6 asked for:
-          header, financial summary, details, account. */}
+          Stakeholders/Add Contact (M5.6), contact attribution (M5.7) and Change Owner (M5.9) are
+          what now exist; Advance Stage and Escalate are still missing (M2.2's board drag already
+          moves stage; Escalate is M5+). Mark Won/Lost/Add Contact/Change Owner render as plain
+          buttons, not "under a menu" the way docs/06-ui-spec.md's own line names it - Escalate
+          doesn't exist yet either, and this codebase has no dropdown-menu primitive; building one
+          for a handful of buttons ahead of Escalate actually needing it would be premature
+          abstraction (CLAUDE.md #6). The engagement timeline below (M3.5/M3.6) supersedes M2.4's
+          narrower stage-history-only panel, merging it with the activities this modal writes and,
+          since M5.7, the contacts attributed to them. Otherwise this is the same read-only skeleton
+          docs/07-build-backlog.md M1.6 asked for: header, financial summary, details, account. */}
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
         <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">

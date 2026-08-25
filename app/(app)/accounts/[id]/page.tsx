@@ -6,13 +6,14 @@ import { formatMoney } from "@/domain/money";
 import { dateInTimezone, daysSincePlainDate, formatDateInTimezone, formatPlainDate } from "@/lib/dates";
 import { createClient } from "@/lib/supabase/server";
 import { getSessionActor } from "@/services/actor";
-import { getAccount360 } from "@/services/accounts";
+import { getAccount360, getReassignOwnerContext, type ReassignOwnerContext } from "@/services/accounts";
 import { DeniedState } from "@/ui/states/DeniedState";
 import { EmptyState } from "@/ui/states/EmptyState";
 import { checkRouteAccess } from "../../_access";
 import { PipelineTable } from "../../deals/PipelineTable";
 import { AccountTabs } from "./AccountTabs";
 import { AttachmentLink } from "../../deals/[id]/AttachmentLink";
+import { ReassignOwnerModal } from "./ReassignOwnerModal";
 
 // M5.8 (docs/07-build-backlog.md): "Account 360 screen, showing each practice-line relationship
 // with its own owner (D-03)." Reuses the deal detail page's own "detail pages reuse the parent list
@@ -35,6 +36,16 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
   const today = dateInTimezone(new Date().toISOString(), timezone);
   const daysSinceLastEngagement = account.tiles.lastEngagedAt ? daysSincePlainDate(account.tiles.lastEngagedAt, today) : null;
 
+  // M5.9 (docs/07-build-backlog.md): "Handover panel... shown on owner change." One context per
+  // practice-line owner row, not once for the whole account - account.reassign_owner's own grant is
+  // practice-scoped (getReassignOwnerContext's own comment explains why).
+  const reassignContexts: ReassignOwnerContext[] =
+    session.status === "active"
+      ? await Promise.all(
+          account.practiceLineOwners.map((po) => getReassignOwnerContext(supabase, session.actor, account.id, po.practiceLineId, po.ownerId)),
+        )
+      : account.practiceLineOwners.map(() => ({ canReassign: false, assignableOwners: [] }));
+
   return (
     <div className="flex flex-col gap-6">
       <header className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
@@ -51,9 +62,20 @@ export default async function AccountDetailPage({ params }: { params: Promise<{ 
             <p className="text-sm text-muted">No practice-line relationship recorded yet.</p>
           ) : (
             <ul className="flex flex-wrap gap-3 text-sm text-ink">
-              {account.practiceLineOwners.map((po) => (
-                <li key={po.practiceLineId} className="rounded-token bg-surface px-2.5 py-1">
-                  <span className="text-muted">{po.practiceLineName}:</span> {po.ownerName}
+              {account.practiceLineOwners.map((po, index) => (
+                <li key={po.practiceLineId} className="flex items-center gap-2 rounded-token bg-surface px-2.5 py-1">
+                  <span>
+                    <span className="text-muted">{po.practiceLineName}:</span> {po.ownerName}
+                  </span>
+                  {reassignContexts[index]?.canReassign ? (
+                    <ReassignOwnerModal
+                      accountId={account.id}
+                      practiceLineId={po.practiceLineId}
+                      practiceLineName={po.practiceLineName}
+                      timezone={timezone}
+                      assignableOwners={reassignContexts[index]!.assignableOwners}
+                    />
+                  ) : null}
                 </li>
               ))}
             </ul>

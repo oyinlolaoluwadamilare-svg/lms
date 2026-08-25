@@ -46,6 +46,7 @@ export const ACTIONS = [
   "account.create",
   "account.update",
   "account.merge",
+  "account.reassign_owner",
   "contact.view",
   "contact.create",
   "contact.update",
@@ -173,6 +174,13 @@ const DEAL: Record<Action, PermissionEntry> = {
   "account.create": ["practice"],
   "account.update": ["practice"],
   "account.merge": null,
+  // M5.9 (docs/07-build-backlog.md): "Handover panel... shown on owner change." A bde cannot
+  // reassign a practice-line relationship's own owner - the same "structurally cannot do this,
+  // unlike every field plain account.update covers" reasoning deal.change_owner's own comment
+  // already gives (src/data/deals.ts's updateDeal comment). Mirrors deal.change_owner's exact
+  // scope shape (denied/practice/practice/denied/tenant) rather than inventing a different one -
+  // reassigning who owns a relationship is the same class of managerial action either way.
+  "account.reassign_owner": null,
   "contact.view": ["practice"],
   "contact.create": ["practice"],
   "contact.update": ["practice"],
@@ -243,6 +251,7 @@ const TEAM_LEAD: Record<Action, PermissionEntry> = {
   "task.resolve_comment": ["practice"],
   "account.create": ["practice"],
   "account.update": ["practice"],
+  "account.reassign_owner": ["practice"],
   "contact.create": ["practice"],
   "contact.update": ["practice"],
   "contact.link_to_deal": ["practice"],
@@ -312,6 +321,7 @@ const EXECUTIVE: Record<Action, PermissionEntry> = {
   "account.create": null,
   "account.update": null,
   "account.merge": null,
+  "account.reassign_owner": null,
   "contact.view": ["tenant"],
   "contact.create": null,
   "contact.update": null,
@@ -385,6 +395,7 @@ const TENANT_ADMIN: Record<Action, PermissionEntry> = {
   "account.create": ["tenant"],
   "account.update": ["tenant"],
   "account.merge": ["tenant"],
+  "account.reassign_owner": ["tenant"],
   "contact.view": ["tenant"],
   "contact.create": ["tenant"],
   "contact.update": ["tenant"],

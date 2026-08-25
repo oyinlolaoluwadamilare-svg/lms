@@ -244,6 +244,46 @@ export async function listMyWorkTasks(supabase: SupabaseClient, userId: string, 
   }));
 }
 
+// For the Handover panel (M5.9: "last ten engagements, open tasks and contacts, shown on owner
+// change"). Batched across every deal id given in one call, the same reasoning M5.7/M5.8's own
+// batched siblings (listContactsForActivities, listActivitiesForDeals, etc.) already establish -
+// works identically for a single deal's own handover (one id) or a whole practice-line
+// relationship's handover across an account's several deals (M5.9's own "both" scope). Reads
+// through the caller's own RLS-scoped session, same reasoning listMyWorkTasks already gives:
+// tasks_select already scopes rows to the caller's tenant/practice entitlement, filtered further
+// here to open/in_progress/blocked only, the same "an open work queue" definition listMyWorkTasks
+// already uses.
+export async function listOpenTasksForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<TaskQueueItem[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("tasks")
+    .select(
+      "id, title, due_date, priority, status, snooze_count, assignee_id, " +
+        "assignee:users!assignee_id(full_name), deal:deals!deal_id(id, name, account:accounts!account_id(name))",
+    )
+    .is("deleted_at", null)
+    .in("status", ["open", "in_progress", "blocked"])
+    .in("deal_id", dealIds)
+    .order("due_date", { ascending: true });
+
+  if (error) throw new Error(`listOpenTasksForDeals failed: ${error.message}`);
+
+  return (data as unknown as TaskQueueRow[]).map((row) => ({
+    id: row.id,
+    title: row.title,
+    dueDate: row.due_date,
+    priority: row.priority,
+    status: row.status,
+    snoozeCount: row.snooze_count,
+    assigneeId: row.assignee_id,
+    assigneeName: row.assignee?.full_name ?? "Unknown",
+    dealId: row.deal?.id ?? null,
+    dealName: row.deal?.name ?? null,
+    accountName: row.deal?.account?.name ?? null,
+  }));
+}
+
 export interface TeamMemberTaskCounts {
   open: number;
   overdue: number;

@@ -383,6 +383,7 @@ export interface DealForAuthorization {
   authorId: string;
   status: DealStatus;
   accountId: string;
+  name: string;
 }
 
 // For any service's can() authorisation check against a deal - just enough of the deal to build
@@ -397,10 +398,12 @@ export interface DealForAuthorization {
 // invoking close_deal - the other two callers simply ignore the field. `accountId` was added for
 // linkContactToDeal (M5.5), which needs it for a clean pre-check that a contact belongs to the same
 // account as the deal, before ever reaching migration 0018's own non-bypassable trigger backstop.
+// `name` was added for changeDealOwner (M5.9), which needs it to label the deal in the handover
+// summary's own timeline entries without a second round trip.
 export async function getDealForAuthorization(supabase: SupabaseClient, dealId: string): Promise<DealForAuthorization | null> {
   const { data, error } = await supabase
     .from("deals")
-    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id, status, account_id")
+    .select("id, tenant_id, practice_line_id, stage_id, owner_id, author_id, status, account_id, name")
     .eq("id", dealId)
     .is("deleted_at", null)
     .maybeSingle();
@@ -417,6 +420,7 @@ export async function getDealForAuthorization(supabase: SupabaseClient, dealId: 
     author_id: string;
     status: DealStatus;
     account_id: string;
+    name: string;
   };
   return {
     id: row.id,
@@ -427,6 +431,7 @@ export async function getDealForAuthorization(supabase: SupabaseClient, dealId: 
     authorId: row.author_id,
     status: row.status,
     accountId: row.account_id,
+    name: row.name,
   };
 }
 
@@ -440,6 +445,21 @@ export async function updateDealStage(supabase: SupabaseClient, dealId: string, 
   const { error } = await supabase.from("deals").update({ stage_id: toStageId }).eq("id", dealId);
 
   if (error) throw new Error(`updateDealStage failed: ${error.message}`);
+}
+
+// The only place deals.owner_id is written from application code after creation - called
+// exclusively by src/services/deals.ts's changeDealOwner (M5.9, docs/07-build-backlog.md:
+// "Handover panel... shown on owner change"). Mirrors updateDealStage exactly - a plain
+// single-column update through the caller's own RLS-scoped session. deal.change_owner's own
+// permission check (denied for bde, unlike deal.update's own "own" scope) is what actually keeps
+// this from being a bde self-service action - the same RLS-coarse/service-precise split every
+// other compound write in this codebase already uses, since deals_update's own policy has no
+// per-column concept of which field is being changed (tests/rls/deals_permission_matrix.spec.ts's
+// own documented finding).
+export async function updateDealOwner(supabase: SupabaseClient, dealId: string, newOwnerId: string): Promise<void> {
+  const { error } = await supabase.from("deals").update({ owner_id: newOwnerId }).eq("id", dealId);
+
+  if (error) throw new Error(`updateDealOwner failed: ${error.message}`);
 }
 
 // M1.6 exit criteria (docs/07-build-backlog.md): "Deal detail read-only skeleton: header, financial
