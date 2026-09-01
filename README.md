@@ -2388,6 +2388,100 @@ both a deal's own owner and an account's per-practice-line owner can be reassign
 handover summary shown at the moment it happens, and the change and its "why" are all captured in
 `audit_entries` (M5.9). The next backlog milestone is M6 ("Analytics rebuilt on events").
 
+**M6.1** ("Metric layer implementing `04-metric-definitions.md` exactly, with sample-size
+suppression and reconstructed-event exclusion") is the widest-scoped backlog line hit so far - taken
+literally it spans the entire metric-definitions doc, most of which M6.2-M6.9 already claim by name
+(cohort conversion, time in stage, sales velocity, engagement analytics, task analytics, stage
+regression, dashboards, saved views). What was actually built this milestone is the one section
+those lines leave unclaimed: **Pipeline metrics** - Open pipeline value, Weighted forecast, Category
+forecast - as a new panel on `/analytics`, the first content that screen has ever shown a BDE.
+
+**Sample-size suppression and reconstructed-event exclusion, the two properties the backlog line
+itself names, are deliberately NOT introduced here.** Neither applies to Pipeline metrics: none of
+its three formulas name a minimum sample in `docs/04-metric-definitions.md` (a currency sum over
+zero deals is an honest ₦0, not "insufficient data" - the same reasoning M5.4's loss-reason report
+already established for a raw count of zero), and none of the three touch `stage_events` at all, so
+there is nothing to reconstruct-exclude. Building a generic suppression helper now, with no real
+caller, would have been exactly the premature, horizontal layer CLAUDE.md's own "no premature
+abstraction" rule warns against. Both land for real at **M6.2** (stage-to-stage conversion, minimum
+20 deals) and **M6.3** (time in stage, minimum 10 transits) - the first two metrics in this doc that
+actually need them.
+
+**Reuse, not reinvention.** `dealValue`/`weightedValue` (`src/domain/deal.ts`) already implement
+"Open pipeline value" and "Weighted forecast" exactly - they have backed the Pipeline Deals list's
+own per-row value/weighted-value columns since M2.3/M3.7. `sumMoneyByCurrency` (`src/domain/money.ts`,
+M5.8) sums each across a role-scoped rowset. The only new domain-adjacent work is
+`listActiveDealsForPipelineMetrics` (`src/data/deals.ts`), a lean query for exactly the fields those
+three functions need, filtered to `status = 'active'`, `is_demo = false`, `deleted_at is null` -
+`is_demo` exclusion (CLAUDE.md #7, this file's own opening rule) is new here; `listDeals` itself, the
+Pipeline Deals list, deliberately does not filter it, since a demo deal is real enough to work with
+day to day, just not real enough to count in a metric.
+
+**Scope is the widest grant the actor holds, not a fixed choice per role** - `getPipelineMetrics`
+(`src/services/reports.ts`) derives it from `actor.roleGrants` exactly the way `getLossReasonReport`
+already does (M5.4), extended with one new case: `analytics.view_own` is "yes" for every role in
+docs/02-permission-matrix.md, unlike `analytics.view_practice` (denied outright for BDE) - so a BDE
+with no team_lead/director/executive/tenant_admin grant gets **own** scope instead of being turned
+away, the first time this screen has shown a BDE anything at all. "Own" means owner, author or
+co-owner, mirroring `can()`'s own "own" scope token exactly (`src/auth/permissions.ts`) - proven by a
+dedicated integration-test case where a BDE's own practice has a fourth Advisory deal they have no
+relation to at all: visible to them via RLS's own practice-wide read (D-02), but correctly absent
+from their own Pipeline metrics total. Team Lead/Director get **practice** (their own practice
+line(s), matching `getLossReasonReport`'s identical derivation); Executive/Tenant Admin get
+**tenant**.
+
+**FX conversion is not implemented**, matching the disclosed D-15/M5.8 precedent: both money metrics'
+own wording ("converted to the tenant reporting currency at the current FX rate") names a step this
+codebase cannot perform - no `fx_rates` table exists anywhere, and decision D-08b (which currencies,
+and each tenant's reporting currency) remains open. Returns `Money[]` (one entry per currency
+actually present) rather than picking one currency or inventing a conversion, the same choice
+Account 360's own tiles already made.
+
+**Category forecast always lists all four categories**, including ones with nothing in them (an
+empty `Money[]`, rendered as "—") - the same "a fixed, small, ordered taxonomy where zero is itself
+real information" reasoning `getLossReasonReport`'s own `byValueBand` breakdown already uses, rather
+than the open-ended `byReason`/`byCompetitor` style that omits values that never occurred.
+
+**One inconsistency flagged, not resolved here.** `docs/04-metric-definitions.md`'s engagement
+coverage metric describes scope as "own deals for a BDE, team for a Team Lead, practice for a
+Director, tenant for Executive and Tenant Admin" - implying a Team Lead's own team should be
+narrower than a Director's whole practice. But `docs/02-permission-matrix.md`'s `analytics.view_team`
+row is byte-for-byte identical to `analytics.view_practice`, and nothing in this schema supports a
+narrower grouping - no `manager_id`, no `teams` table; `getTeamOverview`'s own comment (M4.6) is
+explicit that "the team" already means every working-role holder in the same practice line(s), the
+identical set a Director's own "practice" already is. Pipeline metrics has no per-role scoping
+language of its own to conflict with, so this doesn't block M6.1 - but it will block **M6.5**
+(Engagement analytics), the first metric in this doc whose own text actually requires the
+distinction, unless resolved before then.
+
+**A genuine, previously-latent local-infrastructure bug was found and fixed while verifying this
+milestone in a fresh environment for the first time.** `scripts/db-bootstrap-local.sh` granted
+`DELETE` on `notification_preferences`/`task_assignments` to the `authenticated` role *before*
+migrations had ever run, and separately set a default-privileges rule (`select, insert, update,
+delete`) that only ever looked safe because it always ran against an already-migrated local
+database in every prior session of this project - on a truly fresh one, it fires before any table
+exists, so every migration-created table from that point on silently inherits a `DELETE` grant it
+was never meant to have, breaking `tasks.spec.ts`/`documents.spec.ts`/`notifications.spec.ts`'s own
+"no hard-delete path" RLS tests (each asserts a thrown `permission denied`, not a grant-permitted,
+RLS-reduced-to-zero-rows delete). Fixed by moving every table that legitimately needs a `DELETE`
+grant - notification_preferences, task_assignments, outcome_reasons, deal_outcomes, contacts,
+deal_contacts, activity_contacts, each backing a real "grant present, RLS or a trigger blocks it"
+test - into `scripts/db-grants-local.sh`, which correctly runs after migrations, and dropping `DELETE`
+from the default-privileges statement entirely. Confirmed on a from-scratch `db:setup:local`: all 282
+RLS tests pass, and a second consecutive run (idempotency) is unaffected.
+
+New `tests/integration/pipeline-metrics.spec.ts` (4 tests, against the real hosted project, real
+signed-in sessions) proves the exact own/practice/tenant scoping above end to end, including the
+"visible via RLS but excluded from your own scope" case, and that a demo row and a won deal never
+contribute to any scope's total. Manual browser QA against the real hosted project confirmed the
+panel renders correctly for a BDE (own scope, no Loss reasons panel below it - that stays denied),
+a Team Lead (practice scope), and an Executive (tenant scope, both panels together).
+
+Verified: typecheck, lint, unit/permission/layering (342, unchanged - no new domain/permission
+surface this milestone), RLS (282, unchanged in count but the harness itself is now
+order-independent - see above), integration (174, 4 new), and manual browser QA of the Pipeline
+metrics panel across a bde/team_lead/executive session, against the real hosted project, all green.
+
 ## Commands
 
 ```
