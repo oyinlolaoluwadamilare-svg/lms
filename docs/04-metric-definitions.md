@@ -36,7 +36,11 @@ statistical, commit is a human promise.
 distinct deals whose earliest `stage_events` row entering stage N falls inside the period. The
 numerator is how many of those same deals subsequently recorded an event entering stage N+1 or
 beyond, at any later date including after the period ends. Cohort-based, never a snapshot ratio of
-current-stage counts. Minimum sample: 20 deals in the denominator.
+current-stage counts. Minimum sample: 20 deals in the denominator. **Excludes reconstructed
+`stage_events` rows (`is_reconstructed = true`)** from both the cohort and the advancement count
+(decision **D-16**) - this file's own opening line scopes that exclusion to "every duration-based
+metric," and this one is count/cohort-based, not duration-based, so the general rule doesn't
+literally reach it; confirmed directly with the product owner (M6.2) rather than left ambiguous.
 
 **Overall win rate.** Deals reaching a `won` stage divided by deals reaching a terminal stage
 (`won` or `lost`) in the period, by close date. Deals still open are excluded from both sides —

@@ -450,6 +450,20 @@ export async function listActiveDealsForPipelineMetrics(
   });
 }
 
+// M6.2 (docs/07-build-backlog.md): "Cohort conversion funnel." Deliberately no `status` filter,
+// unlike listActiveDealsForPipelineMetrics above - the funnel's own cohort is defined by a deal's
+// stage_events HISTORY (which stage it entered, and when), not its current status, so a won or lost
+// deal's earlier stage transitions must count exactly like an active deal's. Still excludes demo and
+// soft-deleted rows (CLAUDE.md #7, this codebase's blanket metric-exclusion rule).
+export async function listDealIdsForCohortFunnel(supabase: SupabaseClient, practiceLineIds: string[] | null): Promise<string[]> {
+  let query = supabase.from("deals").select("id").eq("is_demo", false).is("deleted_at", null);
+  if (practiceLineIds) query = query.in("practice_line_id", practiceLineIds);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`listDealIdsForCohortFunnel failed: ${error.message}`);
+  return (data as Array<{ id: string }>).map((row) => row.id);
+}
+
 export interface DealForAuthorization {
   id: string;
   tenantId: string;

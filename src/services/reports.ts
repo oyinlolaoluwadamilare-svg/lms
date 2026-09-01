@@ -2,9 +2,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Actor } from "@/auth/permissions";
 import { listDealIdsCoOwnedByUser } from "@/data/dealCoOwners";
 import { listLossOutcomesForReport } from "@/data/dealOutcomes";
-import { listActiveDealsForPipelineMetrics } from "@/data/deals";
+import { listActiveDealsForPipelineMetrics, listDealIdsForCohortFunnel } from "@/data/deals";
+import { listAllStages } from "@/data/pipelineStages";
 import { listPracticeLines } from "@/data/practiceLines";
+import { listStageEventsForFunnel } from "@/data/stageEvents";
 import { VALUE_BAND_LABELS, valueBand, type ForecastCategory } from "@/domain/deal";
+import { withMinimumSample, type MetricResult } from "@/domain/metrics";
 import { sumMoneyByCurrency, type Money } from "@/domain/money";
 
 export interface LossReasonBreakdown {
@@ -143,4 +146,99 @@ export async function getPipelineMetrics(supabase: SupabaseClient, actor: Actor)
   }));
 
   return { scope, dealCount: rows.length, openPipelineValue, weightedForecast, categoryForecast };
+}
+
+// M6.2 (docs/07-build-backlog.md): "Cohort conversion funnel; remove any current-state
+// approximation." There was nothing to remove - no snapshot ratio or funnel of any kind existed
+// anywhere in this codebase before this milestone; the backlog line's own phrase reads as
+// precautionary, not a reference to real code. Gated on analytics.view_practice (practice for
+// Team Lead/Director, tenant for Executive/Tenant Admin, denied for bde), the same shape
+// getLossReasonReport already uses - a confirmed product-owner choice, not defaulted: this metric's
+// own minimum sample (20 deals in the denominator) means a single bde's own book will almost always
+// read "insufficient data," unlike Pipeline metrics' plain sums above, which are meaningful at any
+// count. No new permission action - reuses the existing grant exactly as named in
+// docs/02-permission-matrix.md.
+export type CohortFunnelScope = "practice" | "tenant";
+
+export interface FunnelBoundary {
+  stageId: string;
+  stageName: string;
+  sortOrder: number;
+  cohortSize: number;
+  advancedCount: number;
+  // Fraction (0..1), not a percentage - the UI's own job to format. Suppressed below the doc's own
+  // "20 deals in the denominator" minimum via withMinimumSample (src/domain/metrics.ts), M6.2's own
+  // first real caller of that machinery.
+  conversionRate: MetricResult<number>;
+}
+
+export type GetCohortConversionFunnelResult = { ok: true; scope: CohortFunnelScope; boundaries: FunnelBoundary[] } | { ok: false; code: "denied" };
+
+const STAGE_TO_STAGE_MINIMUM_SAMPLE = 20;
+
+// docs/04-metric-definitions.md "Stage-to-stage conversion rate": "the denominator is the count of
+// distinct deals whose earliest stage_events row entering stage N falls inside the period. The
+// numerator is how many of those same deals subsequently recorded an event entering stage N+1 or
+// beyond, at any later date..." Implemented literally: "N+1 or beyond" is a sort_order comparison
+// (any later stage_events row whose to_stage sort_order exceeds stage N's own), not merely "the very
+// next stage" - a deal that skips a stage still counts as having converted past N. No period
+// filter - "All time" is the one period this codebase's analytics screens have used since M5.4/M6.1,
+// and nothing in this milestone's own backlog line or docs/06-ui-spec.md's funnel mention asks for a
+// picker. Only 'open'-type stages are ever a boundary's own N - a deal doesn't "convert past" a
+// terminal won/lost stage, and pipeline_stages guarantees exactly one of each per tenant.
+export async function getCohortConversionFunnel(supabase: SupabaseClient, actor: Actor): Promise<GetCohortConversionFunnelResult> {
+  const isTenantWide = actor.roleGrants.some((grant) => grant.role === "executive" || grant.role === "tenant_admin");
+  const ownPracticeLineIds = actor.roleGrants
+    .filter((grant) => (grant.role === "team_lead" || grant.role === "director") && grant.practiceLineId)
+    .map((grant) => grant.practiceLineId as string);
+
+  if (!isTenantWide && ownPracticeLineIds.length === 0) {
+    return { ok: false, code: "denied" };
+  }
+
+  const scope: CohortFunnelScope = isTenantWide ? "tenant" : "practice";
+  const practiceLineIds = isTenantWide ? null : ownPracticeLineIds;
+
+  const [stages, dealIds] = await Promise.all([listAllStages(supabase), listDealIdsForCohortFunnel(supabase, practiceLineIds)]);
+  const openStages = stages.filter((stage) => stage.stageType === "open").sort((a, b) => a.sortOrder - b.sortOrder);
+  const sortOrderByStageId = new Map(stages.map((stage) => [stage.id, stage.sortOrder]));
+
+  const events = await listStageEventsForFunnel(supabase, dealIds);
+  const eventsByDeal = new Map<string, typeof events>();
+  for (const event of events) {
+    const forDeal = eventsByDeal.get(event.dealId);
+    if (forDeal) forDeal.push(event);
+    else eventsByDeal.set(event.dealId, [event]);
+  }
+
+  const boundaries: FunnelBoundary[] = openStages.map((stage) => {
+    let cohortSize = 0;
+    let advancedCount = 0;
+
+    for (const dealEvents of eventsByDeal.values()) {
+      // `events` (and so every per-deal group) is already ordered by occurred_at ascending - the
+      // first match is the deal's own earliest entry into this stage.
+      const entryEvent = dealEvents.find((event) => event.toStageId === stage.id);
+      if (!entryEvent) continue;
+
+      cohortSize += 1;
+      const entryTime = new Date(entryEvent.occurredAt).getTime();
+      const advanced = dealEvents.some((event) => {
+        if (new Date(event.occurredAt).getTime() <= entryTime) return false;
+        return (sortOrderByStageId.get(event.toStageId) ?? -Infinity) > stage.sortOrder;
+      });
+      if (advanced) advancedCount += 1;
+    }
+
+    return {
+      stageId: stage.id,
+      stageName: stage.name,
+      sortOrder: stage.sortOrder,
+      cohortSize,
+      advancedCount,
+      conversionRate: withMinimumSample(cohortSize, STAGE_TO_STAGE_MINIMUM_SAMPLE, () => advancedCount / cohortSize),
+    };
+  });
+
+  return { ok: true, scope, boundaries };
 }

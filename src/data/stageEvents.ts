@@ -195,3 +195,37 @@ export async function listStageEventsForDeals(supabase: SupabaseClient, dealIds:
     };
   });
 }
+
+export interface FunnelStageEvent {
+  dealId: string;
+  toStageId: string;
+  occurredAt: string;
+}
+
+// M6.2 (docs/07-build-backlog.md): "Cohort conversion funnel." A lean, cross-deal, all-time fetch of
+// exactly the columns src/services/reports.ts's getCohortConversionFunnel needs to compute every
+// stage boundary's cohort/advancement in one pass - deliberately leaner than
+// listStageEventsForDeals (no stage-name/actor-name joins, since this is aggregated, never rendered
+// row by row). `is_reconstructed = false` excludes reconstructed rows from this count-based metric
+// too, not only duration-based ones - a confirmed product-owner decision (docs/DECISIONS.md D-16),
+// since docs/04-metric-definitions.md's own general exclusion rule is textually scoped to
+// "duration-based" metrics and doesn't, read literally, reach this one. Ordered by occurred_at
+// ascending so the service layer's own per-deal "earliest entry into stage N" lookup is a simple
+// first-match rather than a separate min() pass.
+export async function listStageEventsForFunnel(supabase: SupabaseClient, dealIds: string[]): Promise<FunnelStageEvent[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("stage_events")
+    .select("deal_id, to_stage_id, occurred_at")
+    .in("deal_id", dealIds)
+    .eq("is_reconstructed", false)
+    .order("occurred_at", { ascending: true });
+
+  if (error) throw new Error(`listStageEventsForFunnel failed: ${error.message}`);
+  return (data as Array<{ deal_id: string; to_stage_id: string; occurred_at: string }>).map((row) => ({
+    dealId: row.deal_id,
+    toStageId: row.to_stage_id,
+    occurredAt: row.occurred_at,
+  }));
+}

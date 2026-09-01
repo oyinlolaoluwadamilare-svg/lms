@@ -2482,6 +2482,85 @@ surface this milestone), RLS (282, unchanged in count but the harness itself is 
 order-independent - see above), integration (174, 4 new), and manual browser QA of the Pipeline
 metrics panel across a bde/team_lead/executive session, against the real hosted project, all green.
 
+**M6.2** ("Cohort conversion funnel; remove any current-state approximation.") is the first metric
+this codebase has built that actually needs the two properties M6.1 deliberately deferred: sample-
+size suppression and reconstructed-event exclusion. There was nothing to remove - a codebase-wide
+search turned up no snapshot ratio or funnel of any kind anywhere before this milestone; the backlog
+line's own "remove any current-state approximation" reads as precautionary phrasing, not a reference
+to real code, and is recorded here as such rather than silently ignored.
+
+**Two genuine formula/scope questions, asked directly rather than defaulted.** (1) Who should see
+this panel: `analytics.view_own` (everyone, matching M6.1's Pipeline metrics) or
+`analytics.view_practice` (Team Lead/Director/Executive/Tenant Admin only, matching M5.4's Loss-reason
+report)? The product owner chose **practice/tenant only** - this metric's own 20-deal minimum sample
+means a single bde's own book would almost always read "insufficient data," unlike Pipeline metrics'
+plain sums, which are meaningful at any count. (2) Are reconstructed `stage_events` rows
+(`is_reconstructed = true`) excluded from this metric's cohort/advancement counts? `docs/04-metric-
+definitions.md`'s own exclusion rule is textually scoped to "every duration-based metric," and this
+one is count/cohort-based, not duration-based - a real, textual ambiguity, not a stylistic one. The
+product owner confirmed **D-16**: excluded here too, matching the doc's general framing of
+reconstructed rows as migration artefacts. Currently inert either way (no backfill tool anywhere in
+this codebase has ever set `is_reconstructed = true`), but the formula is now unambiguous for
+whenever one does - `docs/04-metric-definitions.md`'s own entry was updated to state the exclusion
+explicitly rather than leaving a future reader to guess.
+
+**`withMinimumSample` (`src/domain/metrics.ts`, new) is M6.1's own deferred infrastructure, built now
+because this is its first real caller.** A `MetricResult<T>` discriminated union (`{ status: "ok",
+value, sampleSize }` or `{ status: "insufficient_data", sampleSize, minimumRequired }`) implementing
+`docs/04-metric-definitions.md`'s own presentation rule ("display 'insufficient data' rather than a
+spurious figure") - `computeValue` is a thunk, not a plain value, so an expensive or only-meaningful-
+when-sufficient computation (a ratio that would otherwise divide by a near-zero denominator) is never
+even evaluated below the minimum. New `tests/unit/metrics.spec.ts` (4 tests) proves the boundary is
+inclusive (a sample of exactly 20 reports a real value) and that `computeValue` is never called when
+suppressed.
+
+**Implemented literally, per the doc's own wording, not the more intuitive-sounding alternative.**
+"The numerator is how many of those same deals subsequently recorded an event entering stage N+1 or
+beyond" is implemented as a `sort_order` comparison (any later `stage_events` row whose `to_stage`
+sort_order exceeds stage N's own) rather than "the very next stage specifically" - a deal that skips
+a stage still counts as having converted past N. This also means a deal that moves directly from an
+open stage to Lost technically counts as "advanced" for that boundary, since Lost's own `sort_order`
+sits after every open stage in this schema's ordering - a real, slightly counter-intuitive
+consequence of the literal formula, disclosed here rather than quietly adding an exception
+`docs/04-metric-definitions.md` doesn't state. "Overall win rate" (not built this milestone) is the
+separately-defined metric that actually distinguishes won from lost outcomes.
+
+**One canonical, tenant-wide stage list, not one per practice line.** `pipeline_stages` has no
+`practice_line_id` column at all - `sort_order` is unique per tenant, shared across every practice
+line that tenant has. So "the funnel" is exactly the tenant's own `open`-type stages, chained in
+`sort_order`; a practice-scoped funnel filters which *deals* count toward each stage's cohort, never
+a different stage list. Terminal (`won`/`lost`) stages are never a boundary's own N - a deal doesn't
+"convert past" an end state, and migration 0005 already guarantees exactly one of each per tenant.
+
+**No period filter**, matching every analytics panel this codebase has shipped since M5.4: "All
+time" is the one period in use so far, and neither this milestone's own backlog line nor
+`docs/06-ui-spec.md`'s one-line funnel mention (no dedicated layout section exists) asks for a picker
+- building one nobody asked for would be exactly the scope creep this codebase's own conventions
+elsewhere avoid.
+
+**Two lean new data-layer functions**, both intentionally narrower than their nearest existing
+sibling: `listDealIdsForCohortFunnel` (`src/data/deals.ts`) has no `status` filter, unlike M6.1's
+`listActiveDealsForPipelineMetrics` - the funnel's cohort is defined by stage-entry history, not
+current status, so a won or lost deal's earlier transitions must count exactly like an active deal's
+(demo and soft-deleted rows are still excluded, per CLAUDE.md #7). `listStageEventsForFunnel`
+(`src/data/stageEvents.ts`) fetches only `deal_id`/`to_stage_id`/`occurred_at`, ordered ascending -
+no stage-name or actor-name joins, since this is aggregated in the service layer, never rendered row
+by row the way `listStageEventsForDeals` (M5.8's merged timeline) is.
+
+New `tests/integration/cohort-funnel.spec.ts` (3 tests, against the real hosted project, real
+signed-in sessions) proves the exact minimum-sample boundary end to end - a seeded cohort of exactly
+20 deals entering Discovery reports a real 60% conversion rate, while the 12 that go on to Proposal
+report `insufficient_data` there (12 < 20) - alongside practice-vs-tenant scoping (a second practice
+line's own 3 deals are excluded from the Team Lead's cohort but folded into the Executive's) and D-16
+directly: a reconstructed-only stage-entry is seeded specifically to prove it never inflates a
+cohort. Manual browser QA against the real hosted project confirmed the panel renders correctly for
+a bde (no funnel panel at all), a Team Lead (practice scope, the exact 60%/insufficient-data split),
+and an Executive (tenant scope, both practices summed).
+
+Verified: typecheck, lint, unit/permission/layering (346, 4 new), RLS (282, unchanged - no new
+migration this milestone), integration (177, 3 new), and manual browser QA of the conversion funnel
+panel across a bde/team_lead/executive session, against the real hosted project, all green.
+
 ## Commands
 
 ```
