@@ -374,6 +374,82 @@ export async function countDealsWithoutNextAction(supabase: SupabaseClient): Pro
   return count ?? 0;
 }
 
+export interface PipelineMetricsDealRow {
+  id: string;
+  ownerId: string | null;
+  authorId: string;
+  forecastCategory: ForecastCategory;
+  value: Money | null;
+  weightedValue: Money | null;
+}
+
+interface PipelineMetricsDealRowRaw {
+  id: string;
+  owner_id: string | null;
+  author_id: string;
+  forecast_category: ForecastCategory;
+  proposal_value_minor: string | null;
+  negotiated_value_minor: string | null;
+  currency_code: string;
+  probability_override: number | null;
+  pipeline_stages: { probability_threshold: number } | null;
+}
+
+// M6.1 (docs/07-build-backlog.md): "Metric layer implementing 04-metric-definitions.md exactly."
+// Backs "Open pipeline value", "Weighted forecast" and "Category forecast" - all three read from
+// the identical underlying rowset (active, non-demo, non-deleted deals), so one lean query serves
+// all three rather than three separate round trips. `is_demo = false` mirrors CLAUDE.md #7's own
+// rule ("seed rows... excluded from every metric query by default") and docs/04-metric-
+// definitions.md's opening line - listDeals (the Pipeline Deals list itself) deliberately does NOT
+// filter it, since a demo deal is real enough to work with day to day, just not real enough to
+// count in a metric.
+//
+// `practiceLineIds: null` means tenant-wide (mirrors src/services/reports.ts's own
+// getLossReasonReport convention) - relies on the caller's own RLS-scoped session for the tenant
+// boundary, the same way listDeals/countDealsWithoutNextAction already do, never a service-role
+// client.
+export async function listActiveDealsForPipelineMetrics(
+  supabase: SupabaseClient,
+  practiceLineIds: string[] | null,
+): Promise<PipelineMetricsDealRow[]> {
+  let query = supabase
+    .from("deals")
+    .select(
+      "id, owner_id, author_id, forecast_category, proposal_value_minor::text, negotiated_value_minor::text, " +
+        "currency_code, probability_override, pipeline_stages(probability_threshold)",
+    )
+    .eq("status", "active")
+    .eq("is_demo", false)
+    .is("deleted_at", null);
+
+  if (practiceLineIds) query = query.in("practice_line_id", practiceLineIds);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`listActiveDealsForPipelineMetrics failed: ${error.message}`);
+
+  return (data as unknown as PipelineMetricsDealRowRaw[]).map((row) => {
+    if (!row.pipeline_stages) {
+      throw new Error(`deal ${row.id} has no resolvable stage (stage_id is not-null, but the join returned nothing)`);
+    }
+    const dealForCalc: DealForCalculation = {
+      proposalValueMinor: parseMoneyMinor(row.proposal_value_minor),
+      negotiatedValueMinor: parseMoneyMinor(row.negotiated_value_minor),
+      currencyCode: row.currency_code,
+      probabilityOverride: row.probability_override,
+    };
+    const stageForCalc: StageForCalculation = { probabilityThreshold: row.pipeline_stages.probability_threshold };
+
+    return {
+      id: row.id,
+      ownerId: row.owner_id,
+      authorId: row.author_id,
+      forecastCategory: row.forecast_category,
+      value: dealValue(dealForCalc),
+      weightedValue: weightedValue(dealForCalc, stageForCalc),
+    };
+  });
+}
+
 export interface DealForAuthorization {
   id: string;
   tenantId: string;

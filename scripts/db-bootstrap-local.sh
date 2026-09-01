@@ -34,30 +34,30 @@ SQL
 # (app_migrator, not postgres) - `alter default privileges FOR ROLE app_migrator` only affects
 # objects that role creates AFTER this runs, so it must be (re-)run here, in this idempotent
 # bootstrap script, not left as a one-off manual step future migrations would silently depend on.
+#
+# The two DELETE grants this block used to also carry (notification_preferences, task_assignments -
+# M4.8/M4.10's own DELETE-permission tests) were moved to scripts/db-grants-local.sh: this script
+# runs BEFORE any migration has ever applied (db-setup-local.sh's own ordering), so `grant delete on
+# notification_preferences` fails outright on a genuinely fresh database with "relation ... does not
+# exist" - a bug that simply never surfaced before because every prior session reused an
+# already-migrated local Postgres cluster rather than bootstrapping one from nothing. Confirmed
+# directly against a clean container.
+#
+# Deliberately no DELETE in the default-privileges list below either (CLAUDE.md #3: no user-facing
+# hard delete), even though an earlier version of this line included it - on a long-lived, reused
+# local database that appeared harmless, since this ALTER only affects tables created AFTER it
+# first runs, and most tables already existed from before it was added. On a genuinely fresh
+# database, though, this statement runs before ANY table exists, so every migration-created table
+# from that point on would get DELETE granted to `authenticated` by default - silently breaking
+# tasks.spec.ts/documents.spec.ts/notifications.spec.ts's own "no hard-delete path" RLS tests
+# (each asserts a thrown "permission denied", which stops being true the instant the grant exists
+# and RLS, correctly, just reduces the statement to zero affected rows instead). Confirmed directly:
+# a from-scratch db:setup:local with `delete` in this list failed exactly those three tests.
 $PSQL -d "$DB_NAME" -v ON_ERROR_STOP=1 <<SQL
 alter default privileges for role app_migrator in schema public
-  grant select, insert, update, delete on tables to authenticated;
+  grant select, insert, update on tables to authenticated;
 alter default privileges for role app_migrator in schema public
   grant execute on functions to authenticated;
-
--- Retroactive, narrowly scoped - the default-privileges rule above only affects tables
--- app_migrator creates AFTER this script runs, so tables that already existed before this fix
--- still have whatever the original, pre-this-fix one-off GRANT gave them. That original grant
--- turned out to never have included DELETE, on ANY table (confirmed directly: every pre-existing
--- table has select/insert/update but not delete for `authenticated`) - a real, disclosed
--- local/production divergence, since the real hosted project DOES grant DELETE broadly, with RLS
--- alone doing the restricting there. Deliberately NOT fixed with a single blanket
--- "grant delete on all tables in schema public" here: doing that once, while adding M4.10's
--- task_assignments immutability test, immediately broke several OTHER tables' own already-passing
--- "no hard delete" RLS tests elsewhere in this suite - those tests assert a THROWN
--- "permission denied" error, which stops being true the moment DELETE is actually granted and RLS
--- (correctly, with no delete policy) reduces the statement to zero affected rows instead. Fixing
--- every one of those tests' assertions to match the more accurate privilege model is real,
--- valuable work, but it is its own separate cleanup, out of scope for this milestone - so only the
--- two tables genuinely exercised by a real DELETE-permission test today get the grant:
--- notification_preferences (M4.8) and task_assignments (M4.10).
-grant delete on notification_preferences to authenticated;
-grant delete on task_assignments to authenticated;
 SQL
 
 echo "Ready: app_migrator (migrations/superuser), authenticated (RLS test role), database $DB_NAME."
