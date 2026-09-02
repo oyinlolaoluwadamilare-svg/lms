@@ -2633,6 +2633,27 @@ Verified: typecheck, lint, unit/permission/layering (355, 9 new), RLS (285, 3 ne
 `pipeline_stages_update` coverage gap), integration (182, 5 new), and manual browser QA of both new
 screens across a tenant_admin/bde/team_lead session, against the real hosted project, all green.
 
+**M6.4** ("Sales velocity, using the D-05 completeness-threshold definition of a qualified
+opportunity.") is deferred, not skipped silently - flagged in `docs/07-build-backlog.md` directly on
+its own line, and recorded here for the same reason. `docs/04-metric-definitions.md`'s own formula
+names `qualified_opportunities`: deals whose qualification completeness score clears a
+tenant-configured threshold (**D-05**, already decided as a product rule). But the mechanism that
+decision is *about* - `docs/01-domain-model.md`'s own `qualification_answers` table
+("completeness = answered required keys over total required keys") - does not exist anywhere in this
+codebase: no table in any of the 20 migrations applied so far, nothing in `src/domain`, `src/data` or
+`src/services`. It is explicitly scoped to **M9.2** ("Qualification framework with completeness
+gating"), under Leads (**M9.1**), three milestones after this one - the domain model's own aggregate
+map (`Lead → QualificationAnswer → converts to Deal`) treats a Lead as where qualification answers
+are normally captured, which doesn't exist yet either.
+
+Asked directly rather than resolved silently: build the schema now, three milestones out of the
+backlog's own order and designed without Leads existing yet, or defer this one line until M9.1/M9.2
+land for real. The product owner chose to defer - inventing a fake completeness score to unblock the
+formula today would be exactly the kind of fake functionality this codebase has consistently refused
+to build elsewhere (CLAUDE.md #6), and pulling a slice of M9's own schema forward risks designing it
+twice once Leads actually exists. No code, migration, or test changes accompany this entry - continuing
+to M6.5 per that same instruction.
+
 ## Commands
 
 ```

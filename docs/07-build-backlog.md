@@ -145,7 +145,19 @@ qualified opportunity = completeness threshold, tenant-configurable) — no long
 and reconstructed-event exclusion.
 **M6.2** Cohort conversion funnel; remove any current-state approximation.
 **M6.3** Time in stage with median headline; bottleneck highlighting.
-**M6.4** Sales velocity, using the D-05 completeness-threshold definition of a qualified opportunity.
+**M6.4** ⏸ **Deferred, not skipped-silently** - Sales velocity, using the D-05 completeness-threshold
+definition of a qualified opportunity. D-05 is answered as a *decision*, but the mechanism it
+decides about (`qualification_answers`, "completeness = answered required keys over total required
+keys" - `docs/01-domain-model.md`) does not exist anywhere in this codebase: no table, no
+computation, nothing in `src/domain`/`src/data`/`src/services`. It is explicitly scoped to **M9.2**
+("Qualification framework with completeness gating"), under Leads (M9.1's own natural home for it,
+per the domain model's aggregate map: `Lead → QualificationAnswer → converts to Deal`) - three
+milestones after this one. Building Sales velocity now would mean inventing a fake completeness
+score, which this codebase does not do (CLAUDE.md #6, and the standing discipline against fake
+functionality this session has applied consistently elsewhere), or pulling M9.1/M9.2's own schema
+forward out of order, designed without Leads existing yet. Asked directly; the product owner chose
+to defer this one line rather than either. Revisit once M9.1/M9.2 land - continuing to M6.5 in the
+meantime, per that same instruction.
 **M6.5** Engagement analytics: coverage, volume by type paired with conversion, logging latency, time
 to first engagement, next-action coverage — all role-scoped.
 **M6.6** Task analytics: on-time rate excluding cancellations, overdue counts, delegation load.
