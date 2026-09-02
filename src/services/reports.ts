@@ -1,14 +1,23 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Actor } from "@/auth/permissions";
-import { listDealIdsCoOwnedByUser } from "@/data/dealCoOwners";
+import { listActivitiesForEngagementAnalytics } from "@/data/activities";
+import { listDealIdsCoOwnedByUser, listDealIdsCoOwnedByUsers } from "@/data/dealCoOwners";
 import { listLossOutcomesForReport } from "@/data/dealOutcomes";
-import { listActiveDealsForPipelineMetrics, listDealIdsForCohortFunnel } from "@/data/deals";
+import {
+  listActiveDealsForEngagementAnalytics,
+  listActiveDealsForPipelineMetrics,
+  listDealIdsForCohortFunnel,
+  type EngagementAnalyticsDealRow,
+} from "@/data/deals";
 import { listAllStages, listStagesWithBottleneckThreshold } from "@/data/pipelineStages";
 import { listPracticeLines } from "@/data/practiceLines";
 import { listStageDurationsForDeals, listStageEventsForFunnel } from "@/data/stageEvents";
+import { listDirectReports } from "@/data/users";
+import { ACTIVITY_TYPES, OUTCOME_DISPOSITIONS, type ActivityType, type OutcomeDisposition } from "@/domain/activity";
 import { VALUE_BAND_LABELS, valueBand, type ForecastCategory } from "@/domain/deal";
 import { mean, median, withMinimumSample, type MetricResult } from "@/domain/metrics";
 import { sumMoneyByCurrency, type Money } from "@/domain/money";
+import { dateInTimezone, daysSincePlainDate, subtractDaysFromPlainDate } from "@/lib/dates";
 
 export interface LossReasonBreakdown {
   label: string;
@@ -334,4 +343,206 @@ export async function getTimeInStage(supabase: SupabaseClient, actor: Actor): Pr
   });
 
   return { ok: true, scope, boundaries };
+}
+
+// M6.5 (docs/07-build-backlog.md): "Engagement analytics: coverage, volume by type paired with
+// conversion, logging latency, time to first engagement, next-action coverage — all role-scoped."
+// docs/04-metric-definitions.md's own "Engagement coverage" bullet is the only one of the five that
+// states scoping in its own text - "own deals for a BDE, team for a Team Lead, practice for a
+// Director, tenant for Executive and Tenant Admin" - the first metric in this doc requiring a real
+// "team" narrower than "practice" (migration 0021, docs/DECISIONS.md D-18). The same four-way scope
+// is applied consistently to all five metrics on this one panel, not just the one that states it
+// explicitly - "all role-scoped" (this milestone's own backlog line) reads as one shared scoping
+// story for the whole panel, not five independently-scoped metrics. Gated on analytics.view_own,
+// like Pipeline metrics (M6.1) - every role holds it, so a bde is never denied, only narrowed to
+// "own".
+export type EngagementScope = "own" | "team" | "practice" | "tenant";
+
+async function resolveEngagementDeals(
+  supabase: SupabaseClient,
+  actor: Actor,
+): Promise<{ scope: EngagementScope; deals: EngagementAnalyticsDealRow[] }> {
+  const isTenantWide = actor.roleGrants.some((grant) => grant.role === "executive" || grant.role === "tenant_admin");
+  if (isTenantWide) {
+    return { scope: "tenant", deals: await listActiveDealsForEngagementAnalytics(supabase, null) };
+  }
+
+  const hasDirectorGrant = actor.roleGrants.some((grant) => grant.role === "director" && grant.practiceLineId);
+  const leaderPracticeLineIds = actor.roleGrants
+    .filter((grant) => (grant.role === "team_lead" || grant.role === "director") && grant.practiceLineId)
+    .map((grant) => grant.practiceLineId as string);
+
+  // A Director's own grant dominates a Team Lead's in the rare case an actor holds both (in
+  // different practice lines) - practice-wide was never ambiguous, only "team" was, so this
+  // mirrors getPipelineMetrics/getCohortConversionFunnel's own existing "collect every team_lead/
+  // director grant into one practice-wide set" simplification for that edge case rather than
+  // inventing new mixed-grant handling this milestone doesn't need to solve.
+  if (hasDirectorGrant) {
+    return { scope: "practice", deals: await listActiveDealsForEngagementAnalytics(supabase, leaderPracticeLineIds) };
+  }
+
+  const teamLeadPracticeLineIds = actor.roleGrants
+    .filter((grant) => grant.role === "team_lead" && grant.practiceLineId)
+    .map((grant) => grant.practiceLineId as string);
+
+  if (teamLeadPracticeLineIds.length > 0) {
+    const [deals, reportsByPractice] = await Promise.all([
+      listActiveDealsForEngagementAnalytics(supabase, teamLeadPracticeLineIds),
+      Promise.all(teamLeadPracticeLineIds.map((id) => listDirectReports(supabase, actor.tenantId, id, actor.id))),
+    ]);
+    const reportIds = [...new Set(reportsByPractice.flat().map((u) => u.id))];
+    const coOwnedDealIds = await listDealIdsCoOwnedByUsers(supabase, reportIds);
+    const reportIdSet = new Set(reportIds);
+    const teamDeals = deals.filter(
+      (deal) => (deal.ownerId !== null && reportIdSet.has(deal.ownerId)) || reportIdSet.has(deal.authorId) || coOwnedDealIds.has(deal.id),
+    );
+    return { scope: "team", deals: teamDeals };
+  }
+
+  // own - a bde (or an actor with no working-role grant at all, which getSessionActor never
+  // actually produces for an active session, but falling through to the narrowest scope is the
+  // safe default regardless).
+  const [deals, coOwnedDealIds] = await Promise.all([
+    listActiveDealsForEngagementAnalytics(supabase, null),
+    listDealIdsCoOwnedByUser(supabase, actor.id),
+  ]);
+  const ownDeals = deals.filter((deal) => deal.ownerId === actor.id || deal.authorId === actor.id || coOwnedDealIds.has(deal.id));
+  return { scope: "own", deals: ownDeals };
+}
+
+export interface EngagementCoverage {
+  activeDealCount: number;
+  coveredDealCount: number;
+  coverageRate: MetricResult<number>;
+}
+
+export interface ActivityTypeVolume {
+  type: ActivityType;
+  count: number;
+  dispositionCounts: Record<OutcomeDisposition, number>;
+  noDispositionCount: number;
+}
+
+export interface NextActionCoverage {
+  activeDealCount: number;
+  withNextActionCount: number;
+  coverageRate: MetricResult<number>;
+}
+
+export interface EngagementAnalytics {
+  scope: EngagementScope;
+  coverage: EngagementCoverage;
+  volumeByType: ActivityTypeVolume[];
+  loggingLatencyDays: MetricResult<{ medianDays: number; meanDays: number }>;
+  timeToFirstEngagementDays: MetricResult<{ medianDays: number }>;
+  nextActionCoverage: NextActionCoverage;
+}
+
+// docs/04-metric-definitions.md's five metrics, each implemented literally against the one shared
+// deal/activity rowset resolveEngagementDeals assembles above - one round trip per table, not five:
+//
+// - "Engagement coverage": active deals with >=1 client-facing activity in the trailing 14 days,
+//   over all active deals.
+// - "Activity volume by type": count of non-retracted activities grouped by type - paired with an
+//   outcome-disposition breakdown per type (a confirmed product-owner choice for what "paired with
+//   conversion" means here, docs/DECISIONS.md D-18 - the activities table's own outcome_disposition
+//   column already exists and is populated, so this needed no new mechanism). Lists every one of
+//   the 8 known activity types, including ones with zero activities - the same "small, fixed,
+//   ordered taxonomy where zero is itself real information" reasoning getPipelineMetrics's own
+//   categoryForecast and getLossReasonReport's own byValueBand already use, rather than the
+//   open-ended byReason/byCompetitor style that omits values that never occurred. Grouped by type
+//   only, not also by author - the metric's own fuller text says "type and author," but this
+//   milestone's own backlog line and docs/06-ui-spec.md's panel list both say only "by type"; a
+//   per-author breakdown is a real, separate addition nothing in this milestone's own scope asks
+//   for.
+// - "Logging latency": median (headline) and mean (secondary) of created_at's own date minus
+//   activity_date, across every non-retracted activity in scope - the doc's own reasoning for
+//   preferring the median over the mean here ("consulting cycle times are right-skewed and the mean
+//   flatters") is the same "report both, median first" shape M6.3's own Time in stage already
+//   established, so both are computed and returned rather than only the headline.
+// - "Time to first engagement": days from deal creation to the EARLIEST client-facing activity, per
+//   deal, then the median across every deal in scope that has had one - a deal with no client-facing
+//   activity yet is excluded from this distribution entirely (it hasn't happened yet), the same
+//   "excludes deals that haven't reached the thing being measured" reasoning docs/04-metric-
+//   definitions.md's own "Sales cycle length" gives for excluding still-open deals.
+// - "Next-action coverage": active deals with a next_action_task_id, over all active deals - already
+//   almost entirely computed by the same deal rowset the other four use; M4.7's own
+//   countDealsWithoutNextAction is deliberately not reused here, since it only ever computed the
+//   complement count for a dashboard tile, with no scope parameter of its own and no ability to
+//   return the "with" side or the total.
+//
+// None of the five have a minimum sample named in the doc, unlike M6.2/M6.3's real thresholds (20/
+// 10) - but an empty denominator (zero active deals, or zero activities to average) is still not a
+// spurious 0%/0-day figure, so each ratio/average is wrapped in withMinimumSample(count, 1, ...):
+// not a meaningful statistical minimum, just the honest floor below which the arithmetic itself is
+// undefined (division by zero, or median()/mean() of an empty array, which both throw rather than
+// silently returning 0 - src/domain/metrics.ts's own comment already explains why).
+export async function getEngagementAnalytics(supabase: SupabaseClient, actor: Actor, timezone: string, now: Date = new Date()): Promise<EngagementAnalytics> {
+  const { scope, deals } = await resolveEngagementDeals(supabase, actor);
+  const dealIds = deals.map((deal) => deal.id);
+  const activities = await listActivitiesForEngagementAnalytics(supabase, dealIds);
+
+  const today = dateInTimezone(now.toISOString(), timezone);
+  const coverageCutoff = subtractDaysFromPlainDate(today, 14);
+
+  const activitiesByDeal = new Map<string, typeof activities>();
+  for (const activity of activities) {
+    const forDeal = activitiesByDeal.get(activity.dealId);
+    if (forDeal) forDeal.push(activity);
+    else activitiesByDeal.set(activity.dealId, [activity]);
+  }
+
+  // Engagement coverage
+  const coveredDealCount = deals.filter((deal) => {
+    const dealActivities = activitiesByDeal.get(deal.id) ?? [];
+    return dealActivities.some((activity) => activity.isClientFacing && activity.activityDate >= coverageCutoff);
+  }).length;
+  const coverage: EngagementCoverage = {
+    activeDealCount: deals.length,
+    coveredDealCount,
+    coverageRate: withMinimumSample(deals.length, 1, () => coveredDealCount / deals.length),
+  };
+
+  // Activity volume by type, paired with outcome-disposition breakdown
+  const volumeByType: ActivityTypeVolume[] = ACTIVITY_TYPES.map((type) => {
+    const forType = activities.filter((activity) => activity.type === type);
+    const dispositionCounts = Object.fromEntries(OUTCOME_DISPOSITIONS.map((d) => [d, 0])) as Record<OutcomeDisposition, number>;
+    let noDispositionCount = 0;
+    for (const activity of forType) {
+      if (activity.outcomeDisposition) dispositionCounts[activity.outcomeDisposition] += 1;
+      else noDispositionCount += 1;
+    }
+    return { type, count: forType.length, dispositionCounts, noDispositionCount };
+  });
+
+  // Logging latency: created_at's own date minus activity_date, across every activity in scope
+  const latencyDays = activities.map((activity) => daysSincePlainDate(activity.activityDate, dateInTimezone(activity.createdAt, timezone)));
+  const loggingLatencyDays = withMinimumSample(latencyDays.length, 1, () => ({
+    medianDays: median(latencyDays),
+    meanDays: mean(latencyDays),
+  }));
+
+  // Time to first engagement: per deal, days from creation to the earliest client-facing activity -
+  // only deals that have had one contribute to the distribution.
+  const firstEngagementDays: number[] = [];
+  for (const deal of deals) {
+    const dealActivities = (activitiesByDeal.get(deal.id) ?? []).filter((activity) => activity.isClientFacing);
+    if (dealActivities.length === 0) continue;
+    const earliestActivityDate = dealActivities.reduce(
+      (earliest, activity) => (activity.activityDate < earliest ? activity.activityDate : earliest),
+      dealActivities[0]!.activityDate,
+    );
+    firstEngagementDays.push(daysSincePlainDate(earliestActivityDate, dateInTimezone(deal.createdAt, timezone)));
+  }
+  const timeToFirstEngagementDays = withMinimumSample(firstEngagementDays.length, 1, () => ({ medianDays: median(firstEngagementDays) }));
+
+  // Next-action coverage
+  const withNextActionCount = deals.filter((deal) => deal.nextActionTaskId !== null).length;
+  const nextActionCoverage: NextActionCoverage = {
+    activeDealCount: deals.length,
+    withNextActionCount,
+    coverageRate: withMinimumSample(deals.length, 1, () => withNextActionCount / deals.length),
+  };
+
+  return { scope, coverage, volumeByType, loggingLatencyDays, timeToFirstEngagementDays, nextActionCoverage };
 }

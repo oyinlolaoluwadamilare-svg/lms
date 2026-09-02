@@ -11,8 +11,12 @@ import { getCachedActor } from "../_actor";
 // Fields, Roles & Permissions, Outcome Reasons, Automation Rules, Audit Log, Data & Backup) - M5.1
 // was the first of them actually built, M6.3 the second (Pipeline Stages, narrowly - see that
 // screen's own comment for what it deliberately does not yet cover: renaming, reordering, creating
-// or deactivating a stage). Rather than a full tab-bar shell for the six still-unbuilt sections
-// (premature abstraction for sections nothing has designed yet), this stays a plain link list.
+// or deactivating a stage). Team Assignments (M6.5) isn't one of the eight named tabs at all - it's
+// a new admin concept this milestone introduced (migration 0021's manager_id), closest in spirit to
+// the still-unbuilt "Roles & Permissions" tab but narrower and purpose-built for one thing
+// (Engagement analytics' own "team" scope), not a placeholder for that whole future tab. Rather than
+// a full tab-bar shell for the remaining unbuilt sections (premature abstraction for sections
+// nothing has designed yet), this stays a plain link list.
 export default async function AdminPage() {
   const result = await getCachedActor();
   if (result.status !== "active" || !can(result.actor, "admin.view_panel")) {
@@ -31,6 +35,11 @@ export default async function AdminPage() {
         <li>
           <Link href="/admin/pipeline-stages" prefetch={false} className="text-sm font-medium text-accent underline-offset-2 hover:underline">
             Pipeline Stages
+          </Link>
+        </li>
+        <li>
+          <Link href="/admin/team-assignments" prefetch={false} className="text-sm font-medium text-accent underline-offset-2 hover:underline">
+            Team Assignments
           </Link>
         </li>
         <li className="text-sm text-muted">

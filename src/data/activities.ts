@@ -277,3 +277,49 @@ export async function retractActivityRow(
 
   if (error) throw new Error(`retractActivityRow failed: ${error.message}`);
 }
+
+export interface EngagementAnalyticsActivity {
+  dealId: string;
+  type: ActivityType;
+  isClientFacing: boolean;
+  activityDate: string;
+  createdAt: string;
+  outcomeDisposition: OutcomeDisposition | null;
+}
+
+// M6.5 (docs/07-build-backlog.md): "Engagement analytics: coverage, volume by type paired with
+// conversion, logging latency, time to first engagement..." Backs four of M6.5's five metrics (every
+// one but Next-action coverage, which reads only from deals) - a lean, cross-deal fetch of exactly
+// the columns those four need, deliberately excluding retracted activities: "Activity volume by
+// type" states this explicitly ("count of non-retracted activities"), and Logging latency/Time to
+// first engagement/Engagement coverage all measure genuine, standing engagement discipline, which a
+// retracted (i.e. corrected-away) activity no longer represents - the same inference this file's own
+// M5.7 work already made for contact-level last-engaged.
+export async function listActivitiesForEngagementAnalytics(supabase: SupabaseClient, dealIds: string[]): Promise<EngagementAnalyticsActivity[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("activities")
+    .select("deal_id, type, is_client_facing, activity_date, created_at, outcome_disposition")
+    .in("deal_id", dealIds)
+    .is("retracted_at", null);
+
+  if (error) throw new Error(`listActivitiesForEngagementAnalytics failed: ${error.message}`);
+  return (
+    data as Array<{
+      deal_id: string;
+      type: ActivityType;
+      is_client_facing: boolean;
+      activity_date: string;
+      created_at: string;
+      outcome_disposition: OutcomeDisposition | null;
+    }>
+  ).map((row) => ({
+    dealId: row.deal_id,
+    type: row.type,
+    isClientFacing: row.is_client_facing,
+    activityDate: row.activity_date,
+    createdAt: row.created_at,
+    outcomeDisposition: row.outcome_disposition,
+  }));
+}

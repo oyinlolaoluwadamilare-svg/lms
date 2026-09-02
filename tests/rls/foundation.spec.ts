@@ -15,7 +15,7 @@ let migrator: pg.Client;
 const ids = {
   tenantA: "", tenantB: "",
   practiceA1: "", practiceB1: "",
-  adminA: "", execA: "", bdeA: "", suspendedBdeA: "", adminB: "",
+  adminA: "", execA: "", bdeA: "", suspendedBdeA: "", adminB: "", teamLeadA: "",
 };
 
 async function seed() {
@@ -58,6 +58,7 @@ async function seed() {
   ids.bdeA = await makeUser(ids.tenantA, "bde-a@example.com");
   ids.suspendedBdeA = await makeUser(ids.tenantA, "suspended-a@example.com", "suspended");
   ids.adminB = await makeUser(ids.tenantB, "admin-b@example.com");
+  ids.teamLeadA = await makeUser(ids.tenantA, "team-lead-a@example.com");
 
   async function grant(tenantId: string, userId: string, role: string, practiceLineId: string | null) {
     await migrator.query(
@@ -68,6 +69,7 @@ async function seed() {
 
   await grant(ids.tenantA, ids.adminA, "tenant_admin", null);
   await grant(ids.tenantA, ids.execA, "executive", null);
+  await grant(ids.tenantA, ids.teamLeadA, "team_lead", ids.practiceA1);
   await grant(ids.tenantA, ids.bdeA, "bde", ids.practiceA1);
   await grant(ids.tenantA, ids.suspendedBdeA, "bde", ids.practiceA1);
   await grant(ids.tenantB, ids.adminB, "tenant_admin", null);
@@ -212,5 +214,48 @@ describe("bde practice-wide read, own write (D-02)", () => {
       ),
     ).rejects.toThrow(/row-level security/);
     await client.end();
+  });
+});
+
+// M6.5 (docs/07-build-backlog.md): "Engagement analytics... all role-scoped." Migration 0021's own
+// manager_id column and validate_user_roles_manager() trigger. user_roles_update (migration 0003,
+// M0.2) has existed since this exact file's own milestone with no test of its own until now - the
+// identical "scaffolded early, closed here" story migrations 0020/0021's own header comments already
+// tell for pipeline_stages_update.
+describe("user_roles_update: tenant_admin-only, manager_id validated against an active team_lead", () => {
+  it("tenant_admin can set a bde's manager_id to an active team_lead in the same tenant/practice", async () => {
+    const client = await asUser(ids.adminA);
+    const { rowCount } = await client.query("update user_roles set manager_id = $1 where user_id = $2 and tenant_id = $3", [
+      ids.teamLeadA,
+      ids.bdeA,
+      ids.tenantA,
+    ]);
+    expect(rowCount).toBe(1);
+    await client.end();
+
+    const { rows } = await migrator.query("select manager_id from user_roles where user_id = $1 and tenant_id = $2", [ids.bdeA, ids.tenantA]);
+    expect(rows[0].manager_id).toBe(ids.teamLeadA);
+  });
+
+  it("a bde cannot update their own user_roles row (tenant_admin-only)", async () => {
+    const client = await asUser(ids.bdeA);
+    const { rowCount } = await client.query("update user_roles set manager_id = null where user_id = $1 and tenant_id = $2", [
+      ids.bdeA,
+      ids.tenantA,
+    ]);
+    expect(rowCount).toBe(0);
+    await client.end();
+  });
+
+  it("rejects a manager_id that isn't an active team_lead in the same tenant/practice", async () => {
+    await expect(
+      migrator.query("update user_roles set manager_id = $1 where user_id = $2 and tenant_id = $3", [ids.execA, ids.bdeA, ids.tenantA]),
+    ).rejects.toThrow(/is not an active team_lead/);
+  });
+
+  it("rejects a manager_id belonging to a team_lead in a different tenant", async () => {
+    await expect(
+      migrator.query("update user_roles set manager_id = $1 where user_id = $2 and tenant_id = $3", [ids.adminB, ids.bdeA, ids.tenantA]),
+    ).rejects.toThrow(/is not an active team_lead/);
   });
 });

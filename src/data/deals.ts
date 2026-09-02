@@ -464,6 +464,50 @@ export async function listDealIdsForCohortFunnel(supabase: SupabaseClient, pract
   return (data as Array<{ id: string }>).map((row) => row.id);
 }
 
+export interface EngagementAnalyticsDealRow {
+  id: string;
+  ownerId: string | null;
+  authorId: string;
+  createdAt: string;
+  nextActionTaskId: string | null;
+}
+
+// M6.5 (docs/07-build-backlog.md): "Engagement analytics... all role-scoped." Backs every one of
+// M6.5's five metrics - all of them read from the identical active/non-demo/non-deleted deal rowset
+// (Engagement coverage's own denominator, Next-action coverage's own denominator, and the anchor
+// deal set src/services/reports.ts's own scope resolver filters down to own/team ownership for a
+// bde/team_lead). `status = 'active'` matches Engagement coverage's and Next-action coverage's own
+// explicit "active deals" wording; Activity volume/Logging latency/Time to first engagement don't
+// name a status filter, but scoping every one of the five to the SAME active deal set (rather than
+// three different populations depending on which metric) is the simpler, more auditable reading -
+// consistent with the panel showing one set of "your/your team's/your practice's active deals" the
+// whole way down.
+export async function listActiveDealsForEngagementAnalytics(
+  supabase: SupabaseClient,
+  practiceLineIds: string[] | null,
+): Promise<EngagementAnalyticsDealRow[]> {
+  let query = supabase
+    .from("deals")
+    .select("id, owner_id, author_id, created_at, next_action_task_id")
+    .eq("status", "active")
+    .eq("is_demo", false)
+    .is("deleted_at", null);
+
+  if (practiceLineIds) query = query.in("practice_line_id", practiceLineIds);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`listActiveDealsForEngagementAnalytics failed: ${error.message}`);
+  return (data as Array<{ id: string; owner_id: string | null; author_id: string; created_at: string; next_action_task_id: string | null }>).map(
+    (row) => ({
+      id: row.id,
+      ownerId: row.owner_id,
+      authorId: row.author_id,
+      createdAt: row.created_at,
+      nextActionTaskId: row.next_action_task_id,
+    }),
+  );
+}
+
 export interface DealForAuthorization {
   id: string;
   tenantId: string;

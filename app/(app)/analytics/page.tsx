@@ -1,13 +1,17 @@
+import { ACTIVITY_TYPE_LABELS, OUTCOME_DISPOSITIONS, OUTCOME_DISPOSITION_LABELS } from "@/domain/activity";
 import { formatMoney, type Money } from "@/domain/money";
 import { formatDurationSeconds } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import {
   getCohortConversionFunnel,
+  getEngagementAnalytics,
   getLossReasonReport,
   getPipelineMetrics,
   getTimeInStage,
   type CategoryForecastEntry,
   type CohortFunnelScope,
+  type EngagementAnalytics,
+  type EngagementScope,
   type FunnelBoundary,
   type LossReasonBreakdown,
   type PipelineMetricsScope,
@@ -33,6 +37,21 @@ const TIME_IN_STAGE_SCOPE_LABEL: Record<CohortFunnelScope, string> = {
   practice: "Practice time in stage",
   tenant: "Tenant-wide time in stage",
 };
+
+const ENGAGEMENT_SCOPE_LABEL: Record<EngagementScope, string> = {
+  own: "Your engagement",
+  team: "Team engagement",
+  practice: "Practice engagement",
+  tenant: "Tenant-wide engagement",
+};
+
+function formatPercent(fraction: number): string {
+  return `${(fraction * 100).toFixed(0)}%`;
+}
+
+function formatDays(days: number): string {
+  return `${days.toFixed(0)} ${days === 1 ? "day" : "days"}`;
+}
 
 function MoneyList({ values }: { values: Money[] }) {
   if (values.length === 0) return <span className="text-ink">—</span>;
@@ -238,6 +257,127 @@ function TimeInStagePanel({ scope, boundaries }: { scope: CohortFunnelScope; bou
   );
 }
 
+// M6.5 (docs/07-build-backlog.md): "Engagement analytics: coverage, volume by type paired with
+// conversion, logging latency, time to first engagement, next-action coverage — all role-scoped."
+// Gated on analytics.view_own like Pipeline metrics above (M6.1) - a bde is never denied this panel,
+// only narrowed to "own" scope, unlike the Cohort funnel/Time in stage panels which deny a bde
+// outright.
+function EngagementAnalyticsPanel({
+  scope,
+  coverage,
+  volumeByType,
+  loggingLatencyDays,
+  timeToFirstEngagementDays,
+  nextActionCoverage,
+}: {
+  scope: EngagementScope;
+  coverage: EngagementAnalytics["coverage"];
+  volumeByType: EngagementAnalytics["volumeByType"];
+  loggingLatencyDays: EngagementAnalytics["loggingLatencyDays"];
+  timeToFirstEngagementDays: EngagementAnalytics["timeToFirstEngagementDays"];
+  nextActionCoverage: EngagementAnalytics["nextActionCoverage"];
+}) {
+  return (
+    <section className="flex flex-col gap-4 rounded-token border border-line bg-raised p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-ink">{ENGAGEMENT_SCOPE_LABEL[scope]}</h2>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+          <dt className="text-muted">Period</dt>
+          <dd className="text-ink">All time (coverage: trailing 14 days)</dd>
+          <dt className="text-muted">Comparison basis</dt>
+          <dd className="text-ink">None — single snapshot</dd>
+          <dt className="text-muted">Sample size</dt>
+          <dd className="text-ink">{coverage.activeDealCount} active deals</dd>
+          <dt className="text-muted">Exclusions</dt>
+          <dd className="text-ink">Soft-deleted deals, demo deals, and retracted activities</dd>
+        </dl>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="flex flex-col gap-1 rounded-token bg-surface p-4">
+          <p className="text-xs font-medium text-muted">Engagement coverage</p>
+          {coverage.coverageRate.status === "ok" ? (
+            <p className="text-lg font-semibold text-ink">
+              {formatPercent(coverage.coverageRate.value)}{" "}
+              <span className="text-xs font-normal text-muted">
+                ({coverage.coveredDealCount} of {coverage.activeDealCount})
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted">No active deals</p>
+          )}
+        </div>
+        <div className="flex flex-col gap-1 rounded-token bg-surface p-4">
+          <p className="text-xs font-medium text-muted">Next-action coverage</p>
+          {nextActionCoverage.coverageRate.status === "ok" ? (
+            <p className="text-lg font-semibold text-ink">
+              {formatPercent(nextActionCoverage.coverageRate.value)}{" "}
+              <span className="text-xs font-normal text-muted">
+                ({nextActionCoverage.withNextActionCount} of {nextActionCoverage.activeDealCount})
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted">No active deals</p>
+          )}
+        </div>
+        <div className="flex flex-col gap-1 rounded-token bg-surface p-4">
+          <p className="text-xs font-medium text-muted">Logging latency</p>
+          {loggingLatencyDays.status === "ok" ? (
+            <p className="text-lg font-semibold text-ink">
+              {formatDays(loggingLatencyDays.value.medianDays)}{" "}
+              <span className="text-xs font-normal text-muted">(mean {formatDays(loggingLatencyDays.value.meanDays)})</span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted">No activities logged</p>
+          )}
+        </div>
+        <div className="flex flex-col gap-1 rounded-token bg-surface p-4">
+          <p className="text-xs font-medium text-muted">Time to first engagement</p>
+          {timeToFirstEngagementDays.status === "ok" ? (
+            <p className="text-lg font-semibold text-ink">{formatDays(timeToFirstEngagementDays.value.medianDays)}</p>
+          ) : (
+            <p className="text-sm text-muted">No deals engaged yet</p>
+          )}
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <h3 className="text-sm font-semibold text-ink">Activity volume by type</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs font-medium text-muted">
+                <th className="pb-1.5 pr-4 font-medium">Type</th>
+                <th className="pb-1.5 pr-4 text-right font-medium">Count</th>
+                {OUTCOME_DISPOSITIONS.map((disposition) => (
+                  <th key={disposition} className="pb-1.5 pr-4 text-right font-medium">
+                    {OUTCOME_DISPOSITION_LABELS[disposition]}
+                  </th>
+                ))}
+                <th className="pb-1.5 text-right font-medium">Not recorded</th>
+              </tr>
+            </thead>
+            <tbody>
+              {volumeByType.map((row) => (
+                <tr key={row.type} className="border-t border-line">
+                  <td className="py-1.5 pr-4 text-ink">{ACTIVITY_TYPE_LABELS[row.type]}</td>
+                  <td className="py-1.5 pr-4 text-right text-ink">{row.count}</td>
+                  {OUTCOME_DISPOSITIONS.map((disposition) => (
+                    <td key={disposition} className="py-1.5 pr-4 text-right text-ink">
+                      {row.dispositionCounts[disposition]}
+                    </td>
+                  ))}
+                  <td className="py-1.5 text-right text-ink">{row.noDispositionCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 // M5.4 (docs/07-build-backlog.md): "Loss-reason report by practice, value band and competitor."
 // checkRouteAccess lets every role onto /analytics at all (src/domain/navigation.ts's NAV_BY_ROLE
 // names it for everyone), but that is only the coarse "can this role type this URL" gate
@@ -283,10 +423,11 @@ export default async function AnalyticsPage() {
   const session = await getSessionActor(supabase);
   if (session.status !== "active") return <DeniedState message="Analytics is not available for your role." />;
 
-  const [pipelineMetrics, funnelResult, timeInStageResult, lossReasonResult] = await Promise.all([
+  const [pipelineMetrics, funnelResult, timeInStageResult, engagementAnalytics, lossReasonResult] = await Promise.all([
     getPipelineMetrics(supabase, session.actor),
     getCohortConversionFunnel(supabase, session.actor),
     getTimeInStage(supabase, session.actor),
+    getEngagementAnalytics(supabase, session.actor, session.timezone),
     getLossReasonReport(supabase, session.actor),
   ]);
 
@@ -303,6 +444,15 @@ export default async function AnalyticsPage() {
       {funnelResult.ok ? <CohortFunnelPanel scope={funnelResult.scope} boundaries={funnelResult.boundaries} /> : null}
 
       {timeInStageResult.ok ? <TimeInStagePanel scope={timeInStageResult.scope} boundaries={timeInStageResult.boundaries} /> : null}
+
+      <EngagementAnalyticsPanel
+        scope={engagementAnalytics.scope}
+        coverage={engagementAnalytics.coverage}
+        volumeByType={engagementAnalytics.volumeByType}
+        loggingLatencyDays={engagementAnalytics.loggingLatencyDays}
+        timeToFirstEngagementDays={engagementAnalytics.timeToFirstEngagementDays}
+        nextActionCoverage={engagementAnalytics.nextActionCoverage}
+      />
 
       {lossReasonResult.ok ? (
         lossReasonResult.report.totalLosses === 0 ? (

@@ -17,6 +17,7 @@ import {
   getUserByAuthId,
   listAssignableUsersForPractice,
   listAssignableUsersForTenant,
+  listDirectReports,
   listTeamMembersForPractice,
   type AssignableUser,
 } from "@/data/users";
@@ -430,22 +431,32 @@ export interface TeamMemberOverview {
 export type TeamOverviewResult = { ok: true; members: TeamMemberOverview[] } | { ok: false; code: "denied" };
 
 // M4.6's Team view (docs/07-build-backlog.md: "Team view for Team Lead and Director with
-// per-person open, overdue and completed counts"). "The team" means every working-role holder
-// (bde/team_lead/director) in the SAME practice line(s) the actor themselves holds a team_lead/
-// director grant for - docs/02-permission-matrix.md's task.view is practice-scoped for both roles,
-// so a tenant-wide roster would over-reach what either role is actually entitled to see. An actor
-// holding no team_lead/director grant at all (a plain bde, or none) is denied - this view exists
-// for leaders, not individual contributors. An actor holding MULTIPLE practice grants (rare, but
-// not forbidden by the role model) sees the union, deduplicated by member id.
+// per-person open, overdue and completed counts"). Updated by M6.5 (docs/07-build-backlog.md:
+// "Engagement analytics... all role-scoped") to use the real "team" concept migration 0021
+// introduced (manager_id) rather than the practice-wide stand-in this comment used to describe: a
+// Director's own grant still means every working-role holder in that practice line (task.view is
+// practice-scoped for that role, so a tenant-wide roster would over-reach what they're entitled to
+// see), but a Team Lead's own grant now means only their direct reports (listDirectReports,
+// including themselves per the confirmed fallback - docs/DECISIONS.md D-18) - one consistent
+// meaning of "team" everywhere, not a narrower one on the Analytics page and a wider one here. An
+// actor holding no team_lead/director grant at all (a plain bde, or none) is denied - this view
+// exists for leaders, not individual contributors. An actor holding both kinds of grant for the
+// SAME practice line (unusual, not forbidden by the role model) sees the union, which in that case
+// is simply the wider, practice-wide set - listTeamMembersForPractice's own result already
+// contains everything listDirectReports would for that same practice.
 export async function getTeamOverview(supabase: SupabaseClient, actor: Actor, timezone: string, now: Date = new Date()): Promise<TeamOverviewResult> {
-  const practiceLineIds = actor.roleGrants
-    .filter((grant) => (grant.role === "team_lead" || grant.role === "director") && grant.practiceLineId)
-    .map((grant) => grant.practiceLineId as string);
-  if (practiceLineIds.length === 0) return { ok: false, code: "denied" };
+  const grants = actor.roleGrants.filter((grant) => (grant.role === "team_lead" || grant.role === "director") && grant.practiceLineId);
+  if (grants.length === 0) return { ok: false, code: "denied" };
 
-  const membersByPractice = await Promise.all(practiceLineIds.map((id) => listTeamMembersForPractice(supabase, actor.tenantId, id)));
+  const membersByGrant = await Promise.all(
+    grants.map((grant) =>
+      grant.role === "director"
+        ? listTeamMembersForPractice(supabase, actor.tenantId, grant.practiceLineId as string)
+        : listDirectReports(supabase, actor.tenantId, grant.practiceLineId as string, actor.id),
+    ),
+  );
   const membersById = new Map<string, AssignableUser>();
-  for (const list of membersByPractice) {
+  for (const list of membersByGrant) {
     for (const member of list) membersById.set(member.id, member);
   }
 

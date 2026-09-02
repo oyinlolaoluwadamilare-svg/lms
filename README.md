@@ -2654,6 +2654,78 @@ to build elsewhere (CLAUDE.md #6), and pulling a slice of M9's own schema forwar
 twice once Leads actually exists. No code, migration, or test changes accompany this entry - continuing
 to M6.5 per that same instruction.
 
+**M6.5** ("Engagement analytics: coverage, volume by type paired with conversion, logging latency,
+time to first engagement, next-action coverage — all role-scoped.") grew well beyond its own one-line
+description a second time running - the "all role-scoped" phrase turned out to name a scoping tier
+(a Team Lead's own "team") that had never actually existed in this schema, so this milestone's real
+scope became a genuine team concept, a new admin screen, and a correction to already-shipped M4.6
+behaviour, on top of the five metrics the backlog line named.
+
+**"Team" was never actually distinguished from "practice" anywhere in this codebase - `getTeamOverview`
+(M4.6) had already documented the gap in its own comments** ("'the team' means every working-role
+holder in the same practice line(s)"), but nothing forced the question until `docs/04-metric-
+definitions.md`'s own "Engagement coverage" text named a real scope tier for it: "own deals for a BDE,
+**team** for a Team Lead, practice for a Director, tenant for Executive and Tenant Admin." Asked
+directly rather than assumed (the recommended option was to keep practice-wide and treat "team" as a
+documentation phrase, not a real scope) - **the product owner chose to build a real team concept now**,
+then in two follow-up rounds confirmed a new dedicated admin screen (not a bolt-on to an existing one)
+and the fallback for an unassigned Team Lead: themselves alone, never an empty result or a
+misleadingly-inflated practice-wide number. All three answers are recorded as **D-18(a)**.
+
+**New migration 0021**: `user_roles.manager_id` (nullable `uuid references users(id)`), validated by a
+`security definer` trigger (`validate_user_roles_manager()`) rather than a `CHECK` constraint, since
+the rule spans two rows - this grant's own tenant/practice, and the referenced manager's own active
+`team_lead` role row in that same tenant/practice. No RLS change needed: migration 0003's own
+`user_roles_update` policy (tenant_admin-only) already covered it - **and had existed since M0.2 with
+no test of its own until this milestone gave it one**, the identical "scaffolded early, closed here"
+story migration 0020's own `pipeline_stages_update` gap already told (four new cases added to
+`tests/rls/foundation.spec.ts`).
+
+**A new admin screen, `/admin/team-assignments`** - gated on `admin.assign_role` (scaffolded since
+M0.4's original permission matrix, unused until now, the same "already wired, no real caller" story
+`admin.manage_stages` told at M6.3), with its own dedicated permission test added to
+`tests/permissions/matrix.spec.ts` for the same reason. One row per bde, grouped by practice line,
+each with a `<select>` of that practice's own team leads and a Save button - deliberately minimal
+(assign/clear a manager only, no broader user-management), matching the "ship the narrower,
+clearly-named slice" restraint M6.3's own Pipeline Stages screen already applied.
+
+**`getTeamOverview` (M4.6) was updated to match, not left inconsistent with the new screen**: a
+Team Lead's own view now resolves through `manager_id` (direct reports plus themselves) while a
+Director's view is unaffected (still the whole practice) - `tests/integration/team.spec.ts`'s own
+pre-existing fixture and assertions were updated in place, plus one new test proving the unassigned-
+Team-Lead fallback.
+
+**`getEngagementAnalytics` (`src/services/reports.ts`) bundles all five metrics behind one shared
+deal/activity fetch**, the same bundling `getPipelineMetrics` (M6.1) already established, applying the
+same four-way own/team/practice/tenant scope to all five rather than scoping each independently -
+gated on `analytics.view_own` like Pipeline metrics, so a bde is never denied, only narrowed. None of
+the five metrics name a real minimum sample the way M6.2's 20 or M6.3's 10 do, but an empty
+denominator is still not a spurious 0%/0-day figure - each ratio/average is wrapped in
+`withMinimumSample(count, 1, ...)`, disclosed in code as the honest floor below which the arithmetic
+itself is undefined, not a real statistical threshold. "Volume by type paired with conversion" - the
+one other undefined term this milestone's own backlog line introduced - was asked directly and
+resolved as a per-type breakdown by `outcome_disposition` (**D-18(b)**), reusing the `activities` table's
+own already-populated column rather than inventing a new mechanism.
+
+New `tests/integration/team-assignments.spec.ts` (4 tests) proves the new admin screen end to end - a
+tenant_admin can read the roster and set/clear a manager, the trigger's own rejection message surfaces
+correctly for an invalid manager, an audit row is written, and a bde is denied at the `can()` level for
+both. New `tests/integration/engagement-analytics.spec.ts` (5 tests) proves `getEngagementAnalytics`
+end to end against a fixture built specifically to exercise every scope boundary at once: a Team
+Lead's direct report's deals are visible while another bde's deals in the SAME practice are not, a
+Director sees both, an Executive sees a second practice's deal neither of them can, and a bde with
+zero deals reads `insufficient_data` on every metric without ever being denied. Manual browser QA
+against the real hosted project confirmed both new screens: the admin form's saved manager assignment
+survives a reload, a bde is denied on it, and the Analytics page's new Engagement panel renders the
+correct scope label ("Your engagement" / "Team engagement" / "Practice engagement" / "Tenant-wide
+engagement") for a bde/team_lead/director/executive session respectively.
+
+Verified: typecheck, lint, unit/permission/layering (356, 1 new - `admin.assign_role`), RLS (289, 4
+new - the `user_roles_update`/manager_id coverage), integration (192, 9 new, run against the real
+hosted project alongside the full existing suite with no regressions), and manual browser QA of both
+new screens across tenant_admin/bde/team_lead/director/executive sessions, against the real hosted
+project, all green.
+
 ## Commands
 
 ```

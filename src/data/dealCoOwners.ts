@@ -23,3 +23,17 @@ export async function listDealIdsCoOwnedByUser(supabase: SupabaseClient, userId:
   if (error) throw new Error(`listDealIdsCoOwnedByUser failed: ${error.message}`);
   return new Set((data as Array<{ deal_id: string }>).map((row) => row.deal_id));
 }
+
+// M6.5's own "team" scope (a Team Lead's direct reports, migration 0021's manager_id) needs the
+// plural sibling of listDealIdsCoOwnedByUser above - every deal ANY of a set of users co-owns, not
+// just one, so a team's own "own deals" definition (owner, author or co-owner) stays consistent with
+// analytics.view_own's single-actor definition rather than quietly dropping the co-owner case for a
+// team of more than one person.
+export async function listDealIdsCoOwnedByUsers(supabase: SupabaseClient, userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+
+  const { data, error } = await supabase.from("deal_co_owners").select("deal_id").in("user_id", userIds);
+
+  if (error) throw new Error(`listDealIdsCoOwnedByUsers failed: ${error.message}`);
+  return new Set((data as Array<{ deal_id: string }>).map((row) => row.deal_id));
+}

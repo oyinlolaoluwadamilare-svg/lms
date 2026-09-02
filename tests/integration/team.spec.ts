@@ -8,6 +8,12 @@ import { findOrCreateByUniqueMatch, findOrCreateTenant, findOrCreateUser, signIn
 // M4.6 exit criteria (docs/07-build-backlog.md): "Team view for Team Lead and Director with
 // per-person open, overdue and completed counts." Exercises getTeamOverview end to end against the
 // real hosted project, through the real createTask/completeTask services.
+//
+// Updated by M6.5: getTeamOverview's own "team" now means migration 0021's manager_id-based direct
+// reports for a team_lead grant (bde1/bde2 are seeded WITH manager_id = the team lead, below) rather
+// than the whole practice line - a director's own grant is unaffected, still practice-wide. A new
+// case at the bottom proves the confirmed fallback (docs/DECISIONS.md D-18): a team_lead with nobody
+// assigned to them sees a team of just themselves.
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -27,6 +33,7 @@ const ids = {
   bde1AuthId: "",
   bde2AuthId: "",
   otherPracticeBdeAuthId: "",
+  unassignedTeamLeadAuthId: "",
 };
 
 function signIn(email: string): Promise<SupabaseClient> {
@@ -86,15 +93,26 @@ beforeAll(async () => {
   ids.directorAuthId = await findOrCreateUser(service, ids.tenantId, "m4-6-director@example.com", "M4.6 Director", PASSWORD);
   ids.bde1AuthId = await findOrCreateUser(service, ids.tenantId, "m4-6-bde1@example.com", "M4.6 Bde One", PASSWORD);
   ids.bde2AuthId = await findOrCreateUser(service, ids.tenantId, "m4-6-bde2@example.com", "M4.6 Bde Two", PASSWORD);
+  ids.unassignedTeamLeadAuthId = await findOrCreateUser(
+    service,
+    ids.tenantId,
+    "m6-5-unassigned-teamlead@example.com",
+    "M6.5 Unassigned Team Lead",
+    PASSWORD,
+  );
   ids.otherPracticeBdeAuthId = await findOrCreateUser(service, ids.tenantId, "m4-6-bde-other-practice@example.com", "M4.6 Bde Other Practice", PASSWORD);
 
   await service.from("user_roles").delete().eq("tenant_id", ids.tenantId);
+  // team_lead's own row must exist before bde1/bde2's own rows in this same insert - migration
+  // 0021's validate_user_roles_manager() trigger fires per row, in order, and needs to find an
+  // already-inserted active team_lead row to validate manager_id against.
   await service.from("user_roles").insert([
     { tenant_id: ids.tenantId, user_id: ids.teamLeadAuthId, role: "team_lead", practice_line_id: ids.practiceLineId },
     { tenant_id: ids.tenantId, user_id: ids.directorAuthId, role: "director", practice_line_id: ids.practiceLineId },
-    { tenant_id: ids.tenantId, user_id: ids.bde1AuthId, role: "bde", practice_line_id: ids.practiceLineId },
-    { tenant_id: ids.tenantId, user_id: ids.bde2AuthId, role: "bde", practice_line_id: ids.practiceLineId },
+    { tenant_id: ids.tenantId, user_id: ids.bde1AuthId, role: "bde", practice_line_id: ids.practiceLineId, manager_id: ids.teamLeadAuthId },
+    { tenant_id: ids.tenantId, user_id: ids.bde2AuthId, role: "bde", practice_line_id: ids.practiceLineId, manager_id: ids.teamLeadAuthId },
     { tenant_id: ids.tenantId, user_id: ids.otherPracticeBdeAuthId, role: "bde", practice_line_id: ids.otherPracticeLineId },
+    { tenant_id: ids.tenantId, user_id: ids.unassignedTeamLeadAuthId, role: "team_lead", practice_line_id: ids.otherPracticeLineId },
   ]);
 
   await service.from("account_practice_owners").delete().eq("account_id", ids.accountId);
@@ -148,7 +166,7 @@ afterAll(async () => {
 });
 
 describe("getTeamOverview, end to end against a real signed-in session", () => {
-  it("a team_lead sees per-person open/overdue/completed counts for their own practice, excluding the other practice's bde", async () => {
+  it("a team_lead sees per-person open/overdue/completed counts for their own direct reports plus themselves, excluding the director and the other practice's bde", async () => {
     const client = await signIn("m4-6-teamlead@example.com");
     const session = await getSessionActor(client);
     expect(session.status).toBe("active");
@@ -159,7 +177,11 @@ describe("getTeamOverview, end to end against a real signed-in session", () => {
     if (!result.ok) return;
 
     const memberIds = result.members.map((m) => m.id);
-    expect(memberIds).toEqual(expect.arrayContaining([ids.teamLeadAuthId, ids.directorAuthId, ids.bde1AuthId, ids.bde2AuthId]));
+    // Migration 0021 (M6.5): "team" is now manager_id-based direct reports, not the whole practice -
+    // the director is no longer part of a team_lead's own team, even though they're in the same
+    // practice line.
+    expect(memberIds).toEqual(expect.arrayContaining([ids.teamLeadAuthId, ids.bde1AuthId, ids.bde2AuthId]));
+    expect(memberIds).not.toContain(ids.directorAuthId);
     expect(memberIds).not.toContain(ids.otherPracticeBdeAuthId);
 
     const bde1 = result.members.find((m) => m.id === ids.bde1AuthId);
@@ -169,7 +191,7 @@ describe("getTeamOverview, end to end against a real signed-in session", () => {
     expect(bde2).toMatchObject({ fullName: "M4.6 Bde Two", role: "bde", open: 1, overdue: 0, completedRecently: 0 });
   });
 
-  it("a director in the same practice sees the identical roster and counts", async () => {
+  it("a director in the same practice still sees the whole practice, including bde1/bde2's own counts - practice scope is unaffected by manager_id", async () => {
     const client = await signIn("m4-6-director@example.com");
     const session = await getSessionActor(client);
     expect(session.status).toBe("active");
@@ -179,8 +201,24 @@ describe("getTeamOverview, end to end against a real signed-in session", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
+    const memberIds = result.members.map((m) => m.id);
+    expect(memberIds).toEqual(expect.arrayContaining([ids.teamLeadAuthId, ids.directorAuthId, ids.bde1AuthId, ids.bde2AuthId]));
+
     const bde1 = result.members.find((m) => m.id === ids.bde1AuthId);
     expect(bde1).toMatchObject({ open: 2, overdue: 1, completedRecently: 1 });
+  });
+
+  it("a team_lead with nobody assigned to them sees a team of just themselves - the confirmed fallback (D-18), never an empty or practice-wide result", async () => {
+    const client = await signIn("m6-5-unassigned-teamlead@example.com");
+    const session = await getSessionActor(client);
+    expect(session.status).toBe("active");
+    if (session.status !== "active") return;
+
+    const result = await getTeamOverview(client, session.actor, "Africa/Lagos");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.members.map((m) => m.id)).toEqual([ids.unassignedTeamLeadAuthId]);
   });
 
   it("a plain bde (no team_lead/director grant) is denied", async () => {

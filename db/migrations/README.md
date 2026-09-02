@@ -518,3 +518,54 @@ now lists `0001` through `0020`, and the column's presence/nullability was confi
 `tests/integration/time-in-stage.spec.ts` (3 tests) prove the admin screen and the `getTimeInStage`
 metric end to end against the real hosted project, including the exact 10-transit minimum-sample
 boundary and a reconstructed-only transit never being counted.
+
+## 0021_user_roles_manager
+
+M6.5 (docs/07-build-backlog.md): "Engagement analytics... all role-scoped." `docs/04-metric-
+definitions.md`'s own "Engagement coverage" text is the first metric requiring a "team" scope
+narrower than "practice" ("own deals for a BDE, **team** for a Team Lead, practice for a Director,
+tenant for Executive and Tenant Admin") - nothing in the schema distinguished them before now;
+`getTeamOverview` (M4.6) had already documented this exact gap in its own comments. Asked directly in
+two follow-up rounds rather than defaulted (docs/DECISIONS.md D-18): build a real team concept now (a
+`manager_id` column, not a fixed default the way the M6.3 bottleneck threshold could have been), with
+a real settings screen (`/admin/team-assignments`) rather than a column-only placeholder, and update
+`getTeamOverview`'s own already-shipped behaviour to match rather than letting "team" mean two
+different things depending on which screen a Team Lead is looking at.
+
+A single nullable `user_roles.manager_id uuid references users(id)` - lives on `user_roles`, not
+`users`, since a manager relationship is a property of ONE role grant, mirroring every other "who"
+column already on this table (`granted_by`). No cross-tenant default: an unassigned bde is simply not
+on anyone's team roster yet, reading as their own Team Lead's team of just themselves (the confirmed
+fallback) rather than a misleadingly-inflated practice-wide number standing in for an unconfigured
+team.
+
+Validated by a trigger (`validate_user_roles_manager()`, before insert or update, `security
+definer`), not a `CHECK` constraint - the rule spans two rows (this grant's own tenant_id/
+practice_line_id, and the referenced manager's own role row), which a single-row CHECK cannot
+express. `security definer` for the identical reason migrations `0018`/`0019`'s own contact-
+validation triggers needed it: this function's own lookup into `user_roles` must see ground truth
+regardless of the calling actor's own RLS visibility. Deliberately narrow: a manager must be an
+active `team_lead` in the SAME tenant and practice line as the row being assigned - this milestone
+only ever sets `manager_id` on bde-role rows, so validating against `team_lead` specifically (not
+"team_lead or director") keeps the rule exactly as strict as what's actually being built.
+
+No RLS change: migration `0003`'s own `user_roles_update` policy (tenant_admin-only) already covers
+this column - it has existed since M0.2 with no real caller and no RLS test of its own until this
+milestone gives it one (`src/services/teamAssignments.ts`, four new tests in
+`tests/rls/foundation.spec.ts`), the identical "scaffolded early, closed here" story migration
+`0020`'s own `pipeline_stages_update` gap already told.
+
+Verified locally before the hosted apply: applied/rolled-back/re-applied against local Postgres, plus
+a manual `psql` smoke test proving both trigger behaviours directly (a valid manager insert succeeds;
+an invalid one raises the expected exception). `tests/rls/foundation.spec.ts` grew from 15 to 19
+tests in its own file (289 total in the RLS suite, up from 285). Applied to the real hosted project
+via the Management API (a Personal Access Token supplied ad hoc in chat, the same mechanism this
+file's own `0006`/`0007`/`0019`/`0020` notes describe); `schema_migrations` there now lists `0001`
+through `0021`, and the column's presence was confirmed directly via `information_schema.columns`.
+New `tests/integration/team-assignments.spec.ts` (4 tests) and `tests/integration/engagement-
+analytics.spec.ts` (5 tests) prove the new admin screen and the `getEngagementAnalytics` metric end
+to end against the real hosted project, including the trigger's own rejection message and a team_lead
+whose direct reports genuinely differ from their whole practice; `tests/integration/team.spec.ts`'s
+own pre-existing suite was updated in place to prove `getTeamOverview`'s corrected behaviour (4
+tests, including the unassigned-Team-Lead fallback), run against the real hosted project with no
+regressions across the full 192-test integration suite.

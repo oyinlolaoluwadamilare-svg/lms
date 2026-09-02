@@ -323,4 +323,17 @@ describe("named deny/allow cases (docs/02-permission-matrix.md, docs/05-test-str
       expect(can(actorWith(role), "admin.manage_stages"), `${role} should not be able to manage pipeline stages`).toBe(false);
     }
   });
+
+  // M6.5 (docs/07-build-backlog.md): "Engagement analytics", which grew to include a real team
+  // concept (migration 0021's manager_id) and its own admin screen. The identical "scaffolded
+  // early, no real caller until now" story admin.manage_outcome_reasons's and admin.manage_stages's
+  // own comments above tell - this action's matrix entry predates this milestone, but
+  // src/services/teamAssignments.ts (the new /admin/team-assignments manager-assignment screen) is
+  // the first real can() call against it.
+  it("only tenant_admin can assign team manager relationships - every other role, including director, is denied", () => {
+    expect(can(actorWith("tenant_admin"), "admin.assign_role")).toBe(true);
+    for (const role of ["bde", "team_lead", "director", "executive"] as const) {
+      expect(can(actorWith(role), "admin.assign_role"), `${role} should not be able to assign team manager relationships`).toBe(false);
+    }
+  });
 });

@@ -147,3 +147,29 @@ export async function listTeamMembersForPractice(supabase: SupabaseClient, tenan
   if (error) throw new Error(`listTeamMembersForPractice failed: ${error.message}`);
   return mapAssignableUserRows(data as unknown as AssignableUserRow[]);
 }
+
+// M6.5 (docs/07-build-backlog.md): "Engagement analytics... all role-scoped." The narrower sibling
+// of listTeamMembersForPractice above, for a Team Lead's own "team" scope specifically (migration
+// 0021's manager_id): every bde-role row in this practice line whose manager_id points at this
+// manager, PLUS the manager's own row - matching the confirmed fallback (docs/DECISIONS.md D-18): a
+// Team Lead with nobody assigned to them yet sees a team of just themselves, never an empty result
+// or a practice-wide stand-in. `getTeamOverview` (src/services/tasks.ts) uses this for its own
+// team_lead branch; a director's own "practice" branch still goes through listTeamMembersForPractice
+// unchanged - practice scope was never ambiguous, only "team" was.
+export async function listDirectReports(
+  supabase: SupabaseClient,
+  tenantId: string,
+  practiceLineId: string,
+  managerId: string,
+): Promise<AssignableUser[]> {
+  const { data, error } = await supabase
+    .from("user_roles")
+    .select("role, users:users!user_id(id, full_name, email, status, deleted_at)")
+    .eq("tenant_id", tenantId)
+    .eq("practice_line_id", practiceLineId)
+    .is("revoked_at", null)
+    .or(`manager_id.eq.${managerId},user_id.eq.${managerId}`);
+
+  if (error) throw new Error(`listDirectReports failed: ${error.message}`);
+  return mapAssignableUserRows(data as unknown as AssignableUserRow[]);
+}
