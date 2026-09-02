@@ -311,4 +311,16 @@ describe("named deny/allow cases (docs/02-permission-matrix.md, docs/05-test-str
       expect(can(actorWith(role), "admin.manage_outcome_reasons"), `${role} should not be able to manage outcome reasons`).toBe(false);
     }
   });
+
+  // M6.3 (docs/07-build-backlog.md): "Time in stage... bottleneck highlighting." The identical
+  // "scaffolded early, no real caller until now" story admin.manage_outcome_reasons's own comment
+  // above tells - this action's matrix entry predates this milestone, but src/services/
+  // pipelineStages.ts (the new /admin/pipeline-stages bottleneck-threshold screen) is the first
+  // real can() call against it.
+  it("only tenant_admin can manage pipeline stages - every other role, including director, is denied", () => {
+    expect(can(actorWith("tenant_admin"), "admin.manage_stages")).toBe(true);
+    for (const role of ["bde", "team_lead", "director", "executive"] as const) {
+      expect(can(actorWith(role), "admin.manage_stages"), `${role} should not be able to manage pipeline stages`).toBe(false);
+    }
+  });
 });

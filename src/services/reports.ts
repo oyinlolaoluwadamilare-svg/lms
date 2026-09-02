@@ -3,11 +3,11 @@ import type { Actor } from "@/auth/permissions";
 import { listDealIdsCoOwnedByUser } from "@/data/dealCoOwners";
 import { listLossOutcomesForReport } from "@/data/dealOutcomes";
 import { listActiveDealsForPipelineMetrics, listDealIdsForCohortFunnel } from "@/data/deals";
-import { listAllStages } from "@/data/pipelineStages";
+import { listAllStages, listStagesWithBottleneckThreshold } from "@/data/pipelineStages";
 import { listPracticeLines } from "@/data/practiceLines";
-import { listStageEventsForFunnel } from "@/data/stageEvents";
+import { listStageDurationsForDeals, listStageEventsForFunnel } from "@/data/stageEvents";
 import { VALUE_BAND_LABELS, valueBand, type ForecastCategory } from "@/domain/deal";
-import { withMinimumSample, type MetricResult } from "@/domain/metrics";
+import { mean, median, withMinimumSample, type MetricResult } from "@/domain/metrics";
 import { sumMoneyByCurrency, type Money } from "@/domain/money";
 
 export interface LossReasonBreakdown {
@@ -237,6 +237,99 @@ export async function getCohortConversionFunnel(supabase: SupabaseClient, actor:
       cohortSize,
       advancedCount,
       conversionRate: withMinimumSample(cohortSize, STAGE_TO_STAGE_MINIMUM_SAMPLE, () => advancedCount / cohortSize),
+    };
+  });
+
+  return { ok: true, scope, boundaries };
+}
+
+// M6.3 (docs/07-build-backlog.md): "Time in stage with median headline; bottleneck highlighting."
+// Gated and scoped identically to getCohortConversionFunnel above (analytics.view_practice,
+// own/practice/tenant collapsed to just practice/tenant - a confirmed product-owner choice, not a
+// default: this metric's own minimum sample of 10 is lower than the funnel's 20, but the product
+// owner chose to keep every stage-derived analytics panel consistently gated rather than let each
+// one make its own independent call). Reuses CohortFunnelScope rather than a second identical type.
+export interface TimeInStageDurations {
+  medianSeconds: number;
+  meanSeconds: number;
+}
+
+export interface TimeInStageBoundary {
+  stageId: string;
+  stageName: string;
+  sortOrder: number;
+  // null means the tenant_admin has not set one yet (src/services/pipelineStages.ts) - never
+  // flagged as a bottleneck in that case, not flagged against some invented placeholder number.
+  bottleneckThresholdDays: number | null;
+  isBottleneck: boolean;
+  durations: MetricResult<TimeInStageDurations>;
+}
+
+export type GetTimeInStageResult = { ok: true; scope: CohortFunnelScope; boundaries: TimeInStageBoundary[] } | { ok: false; code: "denied" };
+
+const TIME_IN_STAGE_MINIMUM_SAMPLE = 10;
+const SECONDS_PER_DAY = 86400;
+
+// docs/04-metric-definitions.md "Time in stage": "For each stage_events row, duration_in_previous_
+// seconds. Report median as the headline and mean as secondary... Excludes reconstructed events.
+// Minimum sample: 10 completed stage transits." `listStageDurationsForDeals` already excludes
+// reconstructed rows and groups by from_stage_id (the stage a deal is LEAVING, which is what
+// duration_in_previous_seconds actually measures - see that function's own comment). Only 'open'
+// stages are ever aggregated, the same reasoning getCohortConversionFunnel's own comment gives - a
+// deal doesn't "leave" a terminal won/lost stage.
+//
+// "Bottleneck highlighting" (docs/07-build-backlog.md's own phrase, never defined anywhere in
+// docs/04-metric-definitions.md or docs/06-ui-spec.md - the word appears exactly once in the whole
+// docs set) is a confirmed product-owner decision, not an inferred formula: a stage is flagged when
+// its own median (in days) exceeds that SAME stage's own tenant_admin-configured
+// bottleneck_threshold_days (docs/DECISIONS.md D-17) - never a cross-stage "worst of N" comparison,
+// and never flagged at all while insufficient_data or while no threshold has been set.
+export async function getTimeInStage(supabase: SupabaseClient, actor: Actor): Promise<GetTimeInStageResult> {
+  const isTenantWide = actor.roleGrants.some((grant) => grant.role === "executive" || grant.role === "tenant_admin");
+  const ownPracticeLineIds = actor.roleGrants
+    .filter((grant) => (grant.role === "team_lead" || grant.role === "director") && grant.practiceLineId)
+    .map((grant) => grant.practiceLineId as string);
+
+  if (!isTenantWide && ownPracticeLineIds.length === 0) {
+    return { ok: false, code: "denied" };
+  }
+
+  const scope: CohortFunnelScope = isTenantWide ? "tenant" : "practice";
+  const practiceLineIds = isTenantWide ? null : ownPracticeLineIds;
+
+  const [stages, dealIds] = await Promise.all([
+    listStagesWithBottleneckThreshold(supabase),
+    listDealIdsForCohortFunnel(supabase, practiceLineIds),
+  ]);
+  const openStages = stages.filter((stage) => stage.stageType === "open").sort((a, b) => a.sortOrder - b.sortOrder);
+
+  const durations = await listStageDurationsForDeals(supabase, dealIds);
+  const secondsByStage = new Map<string, number[]>();
+  for (const duration of durations) {
+    const forStage = secondsByStage.get(duration.fromStageId);
+    if (forStage) forStage.push(duration.durationInPreviousSeconds);
+    else secondsByStage.set(duration.fromStageId, [duration.durationInPreviousSeconds]);
+  }
+
+  const boundaries: TimeInStageBoundary[] = openStages.map((stage) => {
+    const stageSeconds = secondsByStage.get(stage.id) ?? [];
+    const durationsResult = withMinimumSample(stageSeconds.length, TIME_IN_STAGE_MINIMUM_SAMPLE, () => ({
+      medianSeconds: median(stageSeconds),
+      meanSeconds: mean(stageSeconds),
+    }));
+
+    const isBottleneck =
+      durationsResult.status === "ok" &&
+      stage.bottleneckThresholdDays !== null &&
+      durationsResult.value.medianSeconds / SECONDS_PER_DAY > stage.bottleneckThresholdDays;
+
+    return {
+      stageId: stage.id,
+      stageName: stage.name,
+      sortOrder: stage.sortOrder,
+      bottleneckThresholdDays: stage.bottleneckThresholdDays,
+      isBottleneck,
+      durations: durationsResult,
     };
   });
 

@@ -229,3 +229,36 @@ export async function listStageEventsForFunnel(supabase: SupabaseClient, dealIds
     occurredAt: row.occurred_at,
   }));
 }
+
+export interface StageDuration {
+  fromStageId: string;
+  durationInPreviousSeconds: number;
+}
+
+// M6.3 (docs/07-build-backlog.md): "Time in stage with median headline." `duration_in_previous_
+// seconds` lives on the row that LEAVES a stage (migration 0007's before-insert trigger computes it
+// from the deal's own previous stage_events row, or deals.created_at if none), so "time in stage X"
+// means grouping by this row's `from_stage_id`, not `to_stage_id` - the opposite column from
+// listStageEventsForFunnel above. `is_reconstructed = false` excludes reconstructed rows, both by
+// docs/04-metric-definitions.md's own general "every duration-based metric" rule and by this
+// metric's own bullet restating it explicitly. `from_stage_id is not null` excludes a deal's very
+// first stage_events row (creation has no "previous stage" to have timed) and
+// `duration_in_previous_seconds is not null` excludes reconstructed rows the trigger left
+// uncomputed for (belt-and-braces alongside the is_reconstructed filter, not a substitute for it).
+export async function listStageDurationsForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<StageDuration[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("stage_events")
+    .select("from_stage_id, duration_in_previous_seconds::text")
+    .in("deal_id", dealIds)
+    .eq("is_reconstructed", false)
+    .not("from_stage_id", "is", null)
+    .not("duration_in_previous_seconds", "is", null);
+
+  if (error) throw new Error(`listStageDurationsForDeals failed: ${error.message}`);
+  return (data as Array<{ from_stage_id: string; duration_in_previous_seconds: string }>).map((row) => ({
+    fromStageId: row.from_stage_id,
+    durationInPreviousSeconds: Number(row.duration_in_previous_seconds),
+  }));
+}

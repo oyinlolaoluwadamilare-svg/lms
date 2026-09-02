@@ -46,6 +46,53 @@ export async function listAllStages(supabase: SupabaseClient): Promise<PipelineS
   }));
 }
 
+export interface StageWithBottleneckThreshold {
+  id: string;
+  name: string;
+  sortOrder: number;
+  stageType: StageType;
+  bottleneckThresholdDays: number | null;
+}
+
+// M6.3 (docs/07-build-backlog.md): "Time in stage... bottleneck highlighting." Shared by both
+// getTimeInStage (src/services/reports.ts, which needs every open stage's own threshold to decide
+// whether its median crosses it) and the new Pipeline Stages admin screen
+// (src/services/pipelineStages.ts) - one query, not a duplicate one per caller. Tenant-wide read via
+// pipeline_stages_select RLS (migration 0005) - the same policy listAllStages/listOpenStages above
+// already rely on.
+export async function listStagesWithBottleneckThreshold(supabase: SupabaseClient): Promise<StageWithBottleneckThreshold[]> {
+  const { data, error } = await supabase
+    .from("pipeline_stages")
+    .select("id, name, sort_order, stage_type, bottleneck_threshold_days")
+    .eq("is_active", true)
+    .order("sort_order");
+
+  if (error) throw new Error(`listStagesWithBottleneckThreshold failed: ${error.message}`);
+  return (data as Array<{ id: string; name: string; sort_order: number; stage_type: StageType; bottleneck_threshold_days: number | null }>).map(
+    (row) => ({
+      id: row.id,
+      name: row.name,
+      sortOrder: row.sort_order,
+      stageType: row.stage_type,
+      bottleneckThresholdDays: row.bottleneck_threshold_days,
+    }),
+  );
+}
+
+// Writes through the caller's own RLS-scoped session, never a service-role client - migration
+// 0005's pipeline_stages_update policy (tenant_admin-only) is the real backstop here, the same
+// "RLS is a second, independent control" reasoning CLAUDE.md #1 gives, not merely a check this
+// function trusts a caller to have already made. src/services/pipelineStages.ts's own can() gate is
+// the friendly, clean-error-message layer in front of it.
+export async function updateStageBottleneckThreshold(
+  supabase: SupabaseClient,
+  stageId: string,
+  thresholdDays: number | null,
+): Promise<void> {
+  const { error } = await supabase.from("pipeline_stages").update({ bottleneck_threshold_days: thresholdDays }).eq("id", stageId);
+  if (error) throw new Error(`updateStageBottleneckThreshold failed: ${error.message}`);
+}
+
 export interface StageForChangeStage {
   id: string;
   tenantId: string;

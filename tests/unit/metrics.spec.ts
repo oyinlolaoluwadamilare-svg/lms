@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { withMinimumSample } from "../../src/domain/metrics";
+import { mean, median, withMinimumSample } from "../../src/domain/metrics";
 
 describe("withMinimumSample", () => {
   it("returns insufficient_data below the minimum, without ever calling computeValue", () => {
@@ -31,5 +31,43 @@ describe("withMinimumSample", () => {
     });
     expect(result).toEqual({ status: "insufficient_data", sampleSize: 0, minimumRequired: 20 });
     expect(called).toBe(false);
+  });
+});
+
+describe("median", () => {
+  it("returns the middle value of an odd-length array", () => {
+    expect(median([3, 1, 2])).toBe(2);
+  });
+
+  it("averages the two middle values of an even-length array", () => {
+    expect(median([1, 2, 3, 4])).toBe(2.5);
+  });
+
+  it("does not mutate the input array", () => {
+    const values = [3, 1, 2];
+    median(values);
+    expect(values).toEqual([3, 1, 2]);
+  });
+
+  it("a single value is its own median", () => {
+    expect(median([42])).toBe(42);
+  });
+
+  it("throws on an empty array rather than silently returning 0", () => {
+    expect(() => median([])).toThrow(/empty/);
+  });
+});
+
+describe("mean", () => {
+  it("averages a set of values", () => {
+    expect(mean([1, 2, 3, 4])).toBe(2.5);
+  });
+
+  it("a single value is its own mean", () => {
+    expect(mean([42])).toBe(42);
+  });
+
+  it("throws on an empty array rather than silently returning 0", () => {
+    expect(() => mean([])).toThrow(/empty/);
   });
 });

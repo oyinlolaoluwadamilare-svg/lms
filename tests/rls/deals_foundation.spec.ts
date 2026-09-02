@@ -323,4 +323,43 @@ describe("pipeline_stages: tenant-wide read, tenant_admin-only write", () => {
     expect(rowCount).toBe(1);
     await client.end();
   });
+
+  // pipeline_stages_update has existed since this exact migration (M1.1) with no test of its own
+  // until M6.3 gave it a real caller (src/services/pipelineStages.ts, the new bottleneck-threshold
+  // admin screen) - closing a real, previously undiscovered coverage gap, not merely exercising new
+  // code. An UPDATE policy's USING clause filters which rows are even candidates before any WITH
+  // CHECK runs, so a denied update matches zero rows silently (rowCount 0), never a thrown "row-level
+  // security" error the way a denied INSERT's WITH CHECK does above - the same own/denied contrast
+  // deals_permission_matrix.spec.ts's own header comment already documents for deals_update.
+  it("tenant_admin can update a pipeline stage", async () => {
+    const client = await asUser(ids.adminA);
+    const { rowCount } = await client.query("update pipeline_stages set bottleneck_threshold_days = 14 where id = $1", [ids.stageA]);
+    expect(rowCount).toBe(1);
+    await client.end();
+
+    const { rows } = await migrator.query("select bottleneck_threshold_days from pipeline_stages where id = $1", [ids.stageA]);
+    expect(rows[0].bottleneck_threshold_days).toBe(14);
+  });
+
+  it("a bde cannot update a pipeline stage", async () => {
+    const client = await asUser(ids.bdeA1);
+    const { rowCount } = await client.query("update pipeline_stages set bottleneck_threshold_days = 7 where id = $1", [ids.stageA]);
+    expect(rowCount).toBe(0);
+    await client.end();
+  });
+
+  it("a tenant_admin cannot update another tenant's pipeline stage", async () => {
+    const foreignStage = await migrator.query(
+      `insert into pipeline_stages (tenant_id, name, code, sort_order, probability_threshold, stage_type)
+       values ($1, 'Discovery', 'DISCOVERY', 1, 10, 'open') returning id`,
+      [ids.tenantB],
+    );
+
+    const client = await asUser(ids.adminA);
+    const { rowCount } = await client.query("update pipeline_stages set bottleneck_threshold_days = 30 where id = $1", [
+      foreignStage.rows[0].id,
+    ]);
+    expect(rowCount).toBe(0);
+    await client.end();
+  });
 });

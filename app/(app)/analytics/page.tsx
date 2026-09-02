@@ -1,14 +1,17 @@
 import { formatMoney, type Money } from "@/domain/money";
+import { formatDurationSeconds } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import {
   getCohortConversionFunnel,
   getLossReasonReport,
   getPipelineMetrics,
+  getTimeInStage,
   type CategoryForecastEntry,
   type CohortFunnelScope,
   type FunnelBoundary,
   type LossReasonBreakdown,
   type PipelineMetricsScope,
+  type TimeInStageBoundary,
 } from "@/services/reports";
 import { createClient } from "@/lib/supabase/server";
 import { DeniedState } from "@/ui/states/DeniedState";
@@ -24,6 +27,11 @@ const SCOPE_LABEL: Record<PipelineMetricsScope, string> = {
 const FUNNEL_SCOPE_LABEL: Record<CohortFunnelScope, string> = {
   practice: "Practice conversion funnel",
   tenant: "Tenant-wide conversion funnel",
+};
+
+const TIME_IN_STAGE_SCOPE_LABEL: Record<CohortFunnelScope, string> = {
+  practice: "Practice time in stage",
+  tenant: "Tenant-wide time in stage",
 };
 
 function MoneyList({ values }: { values: Money[] }) {
@@ -163,6 +171,73 @@ function CohortFunnelPanel({ scope, boundaries }: { scope: CohortFunnelScope; bo
   );
 }
 
+// M6.3 (docs/07-build-backlog.md): "Time in stage with median headline; bottleneck highlighting."
+// Gated identically to the Cohort funnel panel above (analytics.view_practice). "Bottleneck"
+// (a badge, not a row colour - this table already carries a numeric column, and a badge reads
+// unambiguously next to it) means this stage's own median exceeds this SAME stage's own
+// tenant_admin-configured threshold (/admin/pipeline-stages, D-17) - never a comparison across
+// stages, and never shown while insufficient_data or while no threshold has been set for that
+// stage.
+function TimeInStagePanel({ scope, boundaries }: { scope: CohortFunnelScope; boundaries: TimeInStageBoundary[] }) {
+  const totalTransits = boundaries.reduce((sum, boundary) => sum + (boundary.durations.status === "ok" ? boundary.durations.sampleSize : 0), 0);
+
+  return (
+    <section className="flex flex-col gap-3 rounded-token border border-line bg-raised p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-ink">{TIME_IN_STAGE_SCOPE_LABEL[scope]}</h2>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+          <dt className="text-muted">Period</dt>
+          <dd className="text-ink">All time</dd>
+          <dt className="text-muted">Comparison basis</dt>
+          <dd className="text-ink">None — single snapshot</dd>
+          <dt className="text-muted">Sample size</dt>
+          <dd className="text-ink">{totalTransits} completed stage transits</dd>
+          <dt className="text-muted">Exclusions</dt>
+          <dd className="text-ink">Soft-deleted deals, demo deals, and reconstructed stage events</dd>
+        </dl>
+      </div>
+
+      {boundaries.length === 0 ? (
+        <p className="text-sm text-muted">No open stages are configured yet.</p>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs font-medium text-muted">
+              <th className="pb-1.5 pr-4 font-medium">Stage</th>
+              <th className="pb-1.5 pr-4 text-right font-medium">Median (headline)</th>
+              <th className="pb-1.5 pr-4 text-right font-medium">Mean</th>
+              <th className="pb-1.5 text-right font-medium">Sample</th>
+            </tr>
+          </thead>
+          <tbody>
+            {boundaries.map((boundary) => (
+              <tr key={boundary.stageId} className="border-t border-line">
+                <td className="py-1.5 pr-4 text-ink">
+                  {boundary.stageName}
+                  {boundary.isBottleneck ? (
+                    <span className="ml-2 rounded-token bg-lost px-1.5 py-0.5 text-xs font-medium text-surface">Bottleneck</span>
+                  ) : null}
+                </td>
+                {boundary.durations.status === "ok" ? (
+                  <>
+                    <td className="py-1.5 pr-4 text-right font-medium text-ink">{formatDurationSeconds(boundary.durations.value.medianSeconds)}</td>
+                    <td className="py-1.5 pr-4 text-right text-ink">{formatDurationSeconds(boundary.durations.value.meanSeconds)}</td>
+                    <td className="py-1.5 text-right text-ink">{boundary.durations.sampleSize}</td>
+                  </>
+                ) : (
+                  <td className="py-1.5 text-right text-muted" colSpan={3}>
+                    Insufficient data ({boundary.durations.sampleSize}, need {boundary.durations.minimumRequired})
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 // M5.4 (docs/07-build-backlog.md): "Loss-reason report by practice, value band and competitor."
 // checkRouteAccess lets every role onto /analytics at all (src/domain/navigation.ts's NAV_BY_ROLE
 // names it for everyone), but that is only the coarse "can this role type this URL" gate
@@ -208,9 +283,10 @@ export default async function AnalyticsPage() {
   const session = await getSessionActor(supabase);
   if (session.status !== "active") return <DeniedState message="Analytics is not available for your role." />;
 
-  const [pipelineMetrics, funnelResult, lossReasonResult] = await Promise.all([
+  const [pipelineMetrics, funnelResult, timeInStageResult, lossReasonResult] = await Promise.all([
     getPipelineMetrics(supabase, session.actor),
     getCohortConversionFunnel(supabase, session.actor),
+    getTimeInStage(supabase, session.actor),
     getLossReasonReport(supabase, session.actor),
   ]);
 
@@ -225,6 +301,8 @@ export default async function AnalyticsPage() {
       />
 
       {funnelResult.ok ? <CohortFunnelPanel scope={funnelResult.scope} boundaries={funnelResult.boundaries} /> : null}
+
+      {timeInStageResult.ok ? <TimeInStagePanel scope={timeInStageResult.scope} boundaries={timeInStageResult.boundaries} /> : null}
 
       {lossReasonResult.ok ? (
         lossReasonResult.report.totalLosses === 0 ? (

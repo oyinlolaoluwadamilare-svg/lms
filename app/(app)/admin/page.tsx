@@ -9,9 +9,10 @@ import { getCachedActor } from "../_actor";
 //
 // docs/06-ui-spec.md's Admin screen names eight tabs (Pipeline Stages, Practice Lines, Custom
 // Fields, Roles & Permissions, Outcome Reasons, Automation Rules, Audit Log, Data & Backup) - M5.1
-// is the first of them actually built. Rather than a full tab-bar shell for the other seven
-// unbuilt sections (premature abstraction for sections nothing has designed yet), this is a plain
-// link list: one real link, the rest named as still-pending.
+// was the first of them actually built, M6.3 the second (Pipeline Stages, narrowly - see that
+// screen's own comment for what it deliberately does not yet cover: renaming, reordering, creating
+// or deactivating a stage). Rather than a full tab-bar shell for the six still-unbuilt sections
+// (premature abstraction for sections nothing has designed yet), this stays a plain link list.
 export default async function AdminPage() {
   const result = await getCachedActor();
   if (result.status !== "active" || !can(result.actor, "admin.view_panel")) {
@@ -27,9 +28,14 @@ export default async function AdminPage() {
             Outcome Reasons
           </Link>
         </li>
+        <li>
+          <Link href="/admin/pipeline-stages" prefetch={false} className="text-sm font-medium text-accent underline-offset-2 hover:underline">
+            Pipeline Stages
+          </Link>
+        </li>
         <li className="text-sm text-muted">
-          Pipeline Stages, Practice Lines, Custom Fields, Roles &amp; Permissions, Automation Rules, Audit Log, and
-          Data &amp; Backup land later in the backlog.
+          Practice Lines, Custom Fields, Roles &amp; Permissions, Automation Rules, Audit Log, and Data &amp; Backup land later in the
+          backlog.
         </li>
       </ul>
     </div>

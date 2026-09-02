@@ -19,3 +19,22 @@ export function withMinimumSample<T>(sampleSize: number, minimumRequired: number
   }
   return { status: "ok", value: computeValue(), sampleSize };
 }
+
+// M6.3 ("Time in stage with median headline"): docs/04-metric-definitions.md's own reasoning for
+// choosing the median over the mean as the headline - "consulting cycle times are right-skewed and
+// the mean flatters" - is exactly why both are computed here rather than only one; the mean is
+// still reported, as secondary, per that same sentence. Neither is defined for an empty input: a
+// caller is expected to have already checked sampleSize (typically via withMinimumSample) before
+// calling either - a median of zero values is not "zero," it is undefined, and returning 0 would be
+// exactly the misleading figure this file's suppression machinery exists to prevent.
+export function median(values: readonly number[]): number {
+  if (values.length === 0) throw new Error("median of an empty array is undefined");
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
+}
+
+export function mean(values: readonly number[]): number {
+  if (values.length === 0) throw new Error("mean of an empty array is undefined");
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}

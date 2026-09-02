@@ -487,3 +487,34 @@ to the hosted project, confirmed directly by testing `DATABASE_URL` itself, whic
 resolution); `schema_migrations` there now lists `0001` through `0019`, and `security_type = DEFINER`
 was confirmed directly on all four new functions. Two new tests in `tests/integration/log-activity.spec.ts`
 prove `logActivity`'s own `contactIds` handling end to end against the real hosted project.
+
+## 0020_pipeline_stage_bottleneck_threshold
+
+M6.3 (docs/07-build-backlog.md): "Time in stage with median headline; bottleneck highlighting." A
+single nullable column - `pipeline_stages.bottleneck_threshold_days` - with a `check (> 0)`
+constraint and no cross-tenant default. "Bottleneck" is never defined anywhere in the docs set (it
+appears exactly once, in the backlog line itself); asked directly, the product owner chose an
+absolute, per-stage, tenant_admin-editable threshold over a relative "worst of N stages" comparison
+or a single tenant-wide number (docs/DECISIONS.md D-17) - Discovery and Negotiation don't take the
+same amount of time by nature, and there is no reasonable single default to seed every tenant's
+every stage with the way the loss-reason value bands (D-12) could.
+
+No RLS change: migration `0005`'s own `pipeline_stages_update` policy (tenant_admin-only) already
+covers this column - it has existed since M1.1 with no real caller and, a genuine gap found while
+building this milestone, no RLS test of its own until now. Both close here: `src/services/
+pipelineStages.ts` (the new `/admin/pipeline-stages` settings screen, mirroring M5.1's Outcome
+Reasons admin screen exactly - `can()` gate plus `writeAudit`) is the first real caller, and three
+new tests were added to `tests/rls/deals_foundation.spec.ts`'s existing "pipeline_stages:
+tenant-wide read, tenant_admin-only write" block (tenant_admin can update; a bde cannot, rowCount 0
+not thrown, since a denied UPDATE's `USING` clause matches zero candidate rows rather than raising
+the way a denied INSERT's `WITH CHECK` does; a tenant_admin cannot update another tenant's stage).
+
+Verified locally before the hosted apply: applied/rolled-back/re-applied against local Postgres, and
+a from-scratch `db:setup:local` confirmed 285 RLS tests pass (282 plus the three new ones). Applied
+to the real hosted project via the Management API (a Personal Access Token supplied ad hoc in chat,
+the same mechanism this file's own `0006`/`0007`/`0019` notes describe); `schema_migrations` there
+now lists `0001` through `0020`, and the column's presence/nullability was confirmed directly via
+`information_schema.columns`. New `tests/integration/pipeline-stages-admin.spec.ts` (2 tests) and
+`tests/integration/time-in-stage.spec.ts` (3 tests) prove the admin screen and the `getTimeInStage`
+metric end to end against the real hosted project, including the exact 10-transit minimum-sample
+boundary and a reconstructed-only transit never being counted.

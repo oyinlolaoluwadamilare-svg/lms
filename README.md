@@ -2561,6 +2561,78 @@ Verified: typecheck, lint, unit/permission/layering (346, 4 new), RLS (282, unch
 migration this milestone), integration (177, 3 new), and manual browser QA of the conversion funnel
 panel across a bde/team_lead/executive session, against the real hosted project, all green.
 
+**M6.3** ("Time in stage with median headline; bottleneck highlighting.") grew well beyond its own
+one-line description once the questions it actually raised were asked rather than assumed - the
+final scope spans a new migration, a second admin settings screen, and a genuine RLS-coverage gap
+closed, none of which the backlog line itself named.
+
+**"Remove any current-state approximation," M6.2's own phrase repeated almost verbatim for the
+funnel, has no equivalent here - there was nothing to remove for Time in stage either**, confirming
+M6.2's own finding rather than repeating a fresh search: no snapshot ratio or duration metric of any
+kind existed anywhere before this milestone.
+
+**"Bottleneck" was undefined, not just unspecified - the word appears exactly once in the entire
+docs set (the backlog line itself), with zero elaboration anywhere in docs/04-metric-definitions.md,
+docs/06-ui-spec.md, docs/01-domain-model.md or docs/DECISIONS.md.** Asked directly rather than
+guessed (per docs/04-metric-definitions.md's own "never invent a metric formula" rule extended to
+cover a highlighting rule with the identical stakes): relative ("the single worst stage among
+sufficient-sample ones") vs. an absolute threshold vs. shipping the table with no highlighting yet.
+The product owner chose an absolute threshold - then, in two follow-up rounds, **per stage rather
+than one tenant-wide number** (Discovery and Negotiation don't take the same amount of time by
+nature) **and a real settings screen built now** rather than a hardcoded default the way the
+loss-reason value bands (D-12) shipped. All three answers are recorded as **D-17**.
+
+**New migration 0020**: `pipeline_stages.bottleneck_threshold_days` (nullable, `check (> 0)`, no
+cross-tenant default - a stage with nothing set is simply never flagged, not flagged against an
+invented placeholder). No RLS change needed: migration 0005's own `pipeline_stages_update` policy
+(tenant_admin-only) already covered it - **and had existed since M1.1 with no test of its own until
+this milestone gave it a real caller**, a genuine, previously undiscovered coverage gap closed here
+(three new cases added to `tests/rls/deals_foundation.spec.ts`'s existing pipeline_stages block, not
+a new file) rather than left further unexercised.
+
+**A second admin settings screen** - `/admin/pipeline-stages`, gated on `admin.manage_stages`
+(scaffolded since M0.4's original permission matrix, unused until now, the identical "already wired,
+no real caller" story `admin.manage_outcome_reasons` told at M5.1) - mirrors that same M5.1 Outcome
+Reasons screen's exact shape: a service file with an explicit `can()` gate plus `writeAudit`
+(`src/services/pipelineStages.ts`), a server action, a client form. Deliberately narrow: only the
+bottleneck threshold this milestone actually needs is editable - the full stage editor
+docs/06-ui-spec.md's own Admin screen section also describes ("the stage editor warns that renaming
+preserves history while reordering affects reporting") stays unbuilt, the identical "ship the
+narrower, clearly-named slice" restraint M5.1's own Outcome Reasons screen already applied (create +
+activate/deactivate only, no label/reorder editing).
+
+**The metric itself** (`getTimeInStage`, `src/services/reports.ts`) reuses almost everything M6.2
+already built: the same `analytics.view_practice` gating and own/practice/tenant-collapsed-to-
+practice/tenant scope derivation (a confirmed product-owner choice again, not a default - this
+metric's own minimum sample of 10 is lower than the funnel's 20, but the product owner chose to keep
+every stage-derived analytics panel consistently gated), and the same "only 'open' stages are ever
+aggregated" reasoning (a deal doesn't "leave" a terminal won/lost stage). New: `median`/`mean`
+(`src/domain/metrics.ts`, unit-tested for the even/odd-length and empty-input cases) sit alongside
+M6.2's own `withMinimumSample` - `duration_in_previous_seconds` lives on the row that LEAVES a
+stage, the opposite column (`from_stage_id`, not `to_stage_id`) from what the funnel's own
+`listStageEventsForFunnel` groups by, so a new, deliberately separate `listStageDurationsForDeals`
+was added rather than overloading that function. Reconstructed events are excluded here too - this
+time with no ambiguity to resolve, since docs/04-metric-definitions.md's "Time in stage" bullet
+states the exclusion as its own explicit sentence, doubly covered by the file's general
+duration-based-metrics rule as well.
+
+New `tests/unit/metrics.spec.ts` coverage (8 new tests) proves `median`/`mean` directly. New
+`tests/integration/pipeline-stages-admin.spec.ts` (2 tests) proves the admin screen end to end - a
+tenant_admin can set and clear a threshold, a bde is denied at the `can()` level for both reading and
+writing. New `tests/integration/time-in-stage.spec.ts` (3 tests) proves `getTimeInStage` end to end
+against a seeded cohort of exactly 10 completed Discovery-to-Proposal transits (median and mean both
+an exact, hand-computable 11 days) alongside a Proposal boundary with only 3 transits
+(`insufficient_data`), a reconstructed-only transit seeded specifically to prove it never counts
+toward Discovery's sample, and the bottleneck flag itself flipping on and off as Discovery's own
+threshold is set above and below its median. Manual browser QA against the real hosted project
+confirmed both new screens: the admin form's saved value survives a reload, a bde is denied on it,
+and the Analytics page's new Time in stage panel renders the "Bottleneck" badge exactly where
+expected, alongside the Pipeline metrics, Cohort funnel and Loss reasons panels it now sits beside.
+
+Verified: typecheck, lint, unit/permission/layering (355, 9 new), RLS (285, 3 new - the
+`pipeline_stages_update` coverage gap), integration (182, 5 new), and manual browser QA of both new
+screens across a tenant_admin/bde/team_lead session, against the real hosted project, all green.
+
 ## Commands
 
 ```

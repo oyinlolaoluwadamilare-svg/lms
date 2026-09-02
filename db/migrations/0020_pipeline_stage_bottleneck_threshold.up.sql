@@ -1,0 +1,22 @@
+-- M6.3 (docs/07-build-backlog.md): "Time in stage with median headline; bottleneck highlighting."
+-- Nothing in docs/04-metric-definitions.md or docs/06-ui-spec.md defines what makes a stage "the
+-- bottleneck" - the word appears exactly once in the whole docs set, in the backlog line itself,
+-- with zero elaboration. Asked directly (relative "highest median among sufficient-sample stages"
+-- vs. an absolute threshold vs. no highlighting yet); the product owner chose an absolute
+-- threshold, per-stage rather than one tenant-wide number (Discovery and Negotiation don't take the
+-- same amount of time by nature), with a real settings screen to edit it now rather than a
+-- hardcoded default (docs/DECISIONS.md D-17).
+--
+-- Nullable, no cross-tenant default - unlike the loss-reason value bands (D-12) or staleness bands,
+-- there is no reasonable single "typical" duration to default every tenant's every stage to, and
+-- this is genuinely per-tenant-admin-editable rather than a flagged, revisit-later default. A stage
+-- with no threshold set is simply never flagged, not flagged against some invented placeholder
+-- number.
+--
+-- No RLS change needed - migration 0005's own pipeline_stages_update policy already scopes writes
+-- to tenant_admin (docs/02-permission-matrix.md admin.manage_stages), and this is a plain column on
+-- that same table. That policy has existed since M1.1 with no real caller and no RLS test of its
+-- own until this milestone - both landed here (src/services/pipelineStages.ts, tests/rls/
+-- pipeline_stages.spec.ts) rather than the gap persisting further.
+alter table pipeline_stages
+  add column bottleneck_threshold_days int check (bottleneck_threshold_days > 0);
