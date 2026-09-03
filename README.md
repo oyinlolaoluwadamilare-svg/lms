@@ -2726,6 +2726,55 @@ hosted project alongside the full existing suite with no regressions), and manua
 new screens across tenant_admin/bde/team_lead/director/executive sessions, against the real hosted
 project, all green.
 
+**M6.6** ("Task analytics: on-time rate excluding cancellations, overdue counts, delegation load.")
+had no scope stated anywhere for any of its three metrics - neither `docs/04-metric-definitions.md`
+nor `docs/02-permission-matrix.md`'s footnotes name one, unlike M6.5's Engagement coverage, whose own
+text at least named the four tiers even if "team" itself was undefined. Asked directly rather than
+assumed (**D-19**): the product owner chose the same own/team/practice/tenant model Pipeline metrics
+(M6.1) and Engagement analytics (M6.5) already use, gated on `analytics.view_own` - a bde is never
+denied, only narrowed to their own tasks, the same personal-accountability shape Engagement coverage
+already has for a bde's own deals. "Team" reuses migration 0021's own `manager_id` concept
+(**D-18**) rather than a fresh definition, so no new migration was needed this milestone.
+
+**Delegation load conceptually overlaps with `getTeamOverview` (M4.6/M6.5)**, which already computes
+near-identical per-assignee open/overdue/completed counts - but for a different audience (My Work's
+own Team tab, team_lead/director only, denying bde and executive) and a different purpose (team
+management, not tenant-wide analytics). Asked directly rather than silently reused or silently
+duplicated: the product owner confirmed a new, separately-scoped function
+(`getTaskAnalytics`) over widening `getTeamOverview`'s own already-shipped scope - Delegation load
+lists only assignees who currently hold at least one open task (a literal reading of "open tasks
+grouped by assignee"), with no completed/overdue breakdown and no leader-only gate, deliberately
+narrower than `getTeamOverview`'s own richer view.
+
+**One real, pre-existing RLS boundary surfaced while building the integration fixture, not a bug in
+this milestone's own code**: `tasks_select`'s policy (migration 0011) grants team_lead/director
+practice-wide visibility ONLY through a task's own linked deal (`deal_id is not null and
+deal_practice_line_id(deal_id) in entitled_practices()`) - a deal-less personal task stays invisible
+to anyone but its own assignee/assigner and tenant_admin/executive, the exact privacy boundary
+`getTeamTaskCounts`'s own comment already documents and accepts. `getTaskAnalytics` reads through the
+caller's own RLS-scoped session, the same "RLS coarse, service precise" split every other M6.x metric
+already uses, so a team_lead/director's own practice-scoped view of Task analytics only ever reflects
+deal-linked tasks for real, deal-less tasks staying private - an existing, intentional boundary, not
+something this milestone introduces or should route around with a service-role client.
+
+New `tests/integration/task-analytics.spec.ts` (5 tests) proves `getTaskAnalytics` end to end against
+the real hosted project: a bde's own 50% on-time rate with the cancelled task never counted toward
+either side of the ratio, a bde with zero completed tasks reading `insufficient_data` without being
+denied, a team_lead's "team" scope excluding a same-practice bde who isn't their direct report, a
+director's "practice" scope including that bde but excluding a second practice's task, and an
+executive's tenant-wide scope seeing everything. Manual browser QA against the real hosted project
+(the seed tenant carries no task fixture data, so every scope correctly rendered the same
+insufficient-data/zero-count empty states the integration tests exercise numerically) confirmed the
+new "Task performance" panel renders the correct scope label ("Your task performance" / "Team task
+performance" / "Practice task performance" / "Tenant-wide task performance") with no console errors,
+for a bde/team_lead/director/executive session respectively.
+
+Verified: typecheck, lint, unit/permission/layering (356, unchanged - `analytics.view_own` already
+has full generic coverage since M6.1, no new permission action this milestone), RLS (289, unchanged -
+no schema change), integration (197, 5 new, run against the real hosted project alongside the full
+existing suite with no regressions), and manual browser QA of the new panel across
+bde/team_lead/director/executive sessions, against the real hosted project, all green.
+
 ## Commands
 
 ```

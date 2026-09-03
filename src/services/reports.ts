@@ -12,7 +12,8 @@ import {
 import { listAllStages, listStagesWithBottleneckThreshold } from "@/data/pipelineStages";
 import { listPracticeLines } from "@/data/practiceLines";
 import { listStageDurationsForDeals, listStageEventsForFunnel } from "@/data/stageEvents";
-import { listDirectReports } from "@/data/users";
+import { listTasksForAnalytics } from "@/data/tasks";
+import { listDirectReports, listTeamMembersForPractice } from "@/data/users";
 import { ACTIVITY_TYPES, OUTCOME_DISPOSITIONS, type ActivityType, type OutcomeDisposition } from "@/domain/activity";
 import { VALUE_BAND_LABELS, valueBand, type ForecastCategory } from "@/domain/deal";
 import { mean, median, withMinimumSample, type MetricResult } from "@/domain/metrics";
@@ -545,4 +546,117 @@ export async function getEngagementAnalytics(supabase: SupabaseClient, actor: Ac
   };
 
   return { scope, coverage, volumeByType, loggingLatencyDays, timeToFirstEngagementDays, nextActionCoverage };
+}
+
+// M6.6 (docs/07-build-backlog.md): "Task analytics: on-time rate excluding cancellations, overdue
+// counts, delegation load." None of the three metrics name a scope anywhere in docs/04-metric-
+// definitions.md or docs/02-permission-matrix.md's footnotes - asked directly rather than assumed
+// (docs/DECISIONS.md D-19): the product owner chose the same own/team/practice/tenant model
+// Pipeline metrics (M6.1) and Engagement analytics (M6.5) already use, gated on analytics.view_own
+// so a bde is never denied - their own on-time rate and overdue count read as personal accountability
+// metrics, the same way Engagement coverage does. "Team" reuses migration 0021's own manager_id
+// concept (docs/DECISIONS.md D-18), not a fresh definition.
+//
+// Deliberately a NEW function, not a reuse of getTeamOverview (M4.6/M6.5, src/services/tasks.ts) -
+// that view answers a different question ("who's on my team and how are they doing," gated to
+// team_lead/director only, denying bde and executive) for a different audience (My Work's own Team
+// tab). Delegation load's own doc text ("open tasks grouped by assignee") is the narrower,
+// literal thing: an assignee/count pair for whoever currently has an open task in scope, nothing
+// about completed-recently or a leader-only gate. Confirmed directly rather than assumed which one
+// wins when they'd otherwise disagree.
+export type TaskAnalyticsScope = "own" | "team" | "practice" | "tenant";
+
+async function resolveTaskAnalyticsMemberIds(supabase: SupabaseClient, actor: Actor): Promise<{ scope: TaskAnalyticsScope; memberIds: string[] | null }> {
+  const isTenantWide = actor.roleGrants.some((grant) => grant.role === "executive" || grant.role === "tenant_admin");
+  if (isTenantWide) return { scope: "tenant", memberIds: null };
+
+  // A Director's own grant dominates a Team Lead's in the rare mixed-grant case - the same
+  // simplification resolveEngagementDeals above (M6.5) already applies, for the identical reason:
+  // practice-wide was never ambiguous, only "team" was.
+  const hasDirectorGrant = actor.roleGrants.some((grant) => grant.role === "director" && grant.practiceLineId);
+  const leaderPracticeLineIds = actor.roleGrants
+    .filter((grant) => (grant.role === "team_lead" || grant.role === "director") && grant.practiceLineId)
+    .map((grant) => grant.practiceLineId as string);
+
+  if (hasDirectorGrant) {
+    const membersByPractice = await Promise.all(leaderPracticeLineIds.map((id) => listTeamMembersForPractice(supabase, actor.tenantId, id)));
+    return { scope: "practice", memberIds: [...new Set(membersByPractice.flat().map((member) => member.id))] };
+  }
+
+  const teamLeadPracticeLineIds = actor.roleGrants
+    .filter((grant) => grant.role === "team_lead" && grant.practiceLineId)
+    .map((grant) => grant.practiceLineId as string);
+
+  if (teamLeadPracticeLineIds.length > 0) {
+    const reportsByPractice = await Promise.all(teamLeadPracticeLineIds.map((id) => listDirectReports(supabase, actor.tenantId, id, actor.id)));
+    return { scope: "team", memberIds: [...new Set(reportsByPractice.flat().map((report) => report.id))] };
+  }
+
+  // own - a bde (or an actor with no working-role grant at all, the same defensive fallback
+  // resolveEngagementDeals above documents).
+  return { scope: "own", memberIds: [actor.id] };
+}
+
+export interface DelegationLoadRow {
+  assigneeId: string;
+  assigneeName: string;
+  openCount: number;
+}
+
+export interface TaskAnalytics {
+  scope: TaskAnalyticsScope;
+  completedCount: number;
+  onTimeCount: number;
+  onTimeRate: MetricResult<number>;
+  overdueCount: number;
+  delegationLoad: DelegationLoadRow[];
+}
+
+const OPEN_TASK_STATUSES = new Set(["open", "in_progress", "blocked"]);
+
+// docs/04-metric-definitions.md's three formulas, applied literally against the one shared rowset
+// listTasksForAnalytics assembles above:
+//
+// - "On-time completion rate": completed_at's own date (in the ACTOR's timezone, CLAUDE.md #8 - a
+//   timestamptz needs resolving through a timezone before comparing to due_date's plain date) <=
+//   due_date, over every task with status='done' in scope. "Excludes cancelled tasks" needs no
+//   separate filter to honour - a cancelled task is never 'done', so it was never going to be
+//   counted as completed in the first place; the doc's own caveat is a defensive clarification for
+//   whoever else implements this, not a second condition this code must apply. All-time, no period
+//   filter, matching every other M6.x panel's own "single snapshot" default (none names a rolling
+//   window either, unlike Engagement coverage's own explicit 14-day text).
+// - "Overdue count": status in (open, in_progress, blocked) and due_date < today (the actor's own
+//   timezone's today - CLAUDE.md #8 again), the identical rule getTeamTaskCounts (M4.6) already
+//   applies for its own "overdue" bucket.
+// - "Delegation load": open tasks (the same three-status definition as Overdue count) grouped by
+//   assignee. Only assignees who currently have at least one open task appear - a literal reading of
+//   "open tasks grouped by assignee," not an every-member-including-zero roster the way
+//   getTeamOverview's own richer per-person view is (a confirmed product-owner choice, not a
+//   default - docs/DECISIONS.md D-19).
+//
+// onTimeRate is wrapped in withMinimumSample(completedCount, 1, ...) - not a real statistical
+// minimum (unlike M6.2's 20 or M6.3's 10), just the honest floor below which the division itself is
+// undefined, the identical reasoning every one of M6.5's five ratios already gives. overdueCount and
+// delegationLoad are plain counts, not ratios - a real, meaningful zero needs no such floor.
+export async function getTaskAnalytics(supabase: SupabaseClient, actor: Actor, timezone: string, now: Date = new Date()): Promise<TaskAnalytics> {
+  const { scope, memberIds } = await resolveTaskAnalyticsMemberIds(supabase, actor);
+  const rows = await listTasksForAnalytics(supabase, memberIds);
+  const today = dateInTimezone(now.toISOString(), timezone);
+
+  const completedRows = rows.filter((row) => row.status === "done" && row.completedAt !== null);
+  const onTimeCount = completedRows.filter((row) => dateInTimezone(row.completedAt as string, timezone) <= row.dueDate).length;
+  const onTimeRate = withMinimumSample(completedRows.length, 1, () => onTimeCount / completedRows.length);
+
+  const openRows = rows.filter((row) => OPEN_TASK_STATUSES.has(row.status));
+  const overdueCount = openRows.filter((row) => row.dueDate < today).length;
+
+  const loadByAssignee = new Map<string, DelegationLoadRow>();
+  for (const row of openRows) {
+    const existing = loadByAssignee.get(row.assigneeId);
+    if (existing) existing.openCount += 1;
+    else loadByAssignee.set(row.assigneeId, { assigneeId: row.assigneeId, assigneeName: row.assigneeName, openCount: 1 });
+  }
+  const delegationLoad = [...loadByAssignee.values()].sort((a, b) => b.openCount - a.openCount || a.assigneeName.localeCompare(b.assigneeName));
+
+  return { scope, completedCount: completedRows.length, onTimeCount, onTimeRate, overdueCount, delegationLoad };
 }

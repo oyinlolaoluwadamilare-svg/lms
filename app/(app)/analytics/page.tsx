@@ -1,4 +1,5 @@
 import { ACTIVITY_TYPE_LABELS, OUTCOME_DISPOSITIONS, OUTCOME_DISPOSITION_LABELS } from "@/domain/activity";
+import type { MetricResult } from "@/domain/metrics";
 import { formatMoney, type Money } from "@/domain/money";
 import { formatDurationSeconds } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
@@ -7,14 +8,17 @@ import {
   getEngagementAnalytics,
   getLossReasonReport,
   getPipelineMetrics,
+  getTaskAnalytics,
   getTimeInStage,
   type CategoryForecastEntry,
   type CohortFunnelScope,
+  type DelegationLoadRow,
   type EngagementAnalytics,
   type EngagementScope,
   type FunnelBoundary,
   type LossReasonBreakdown,
   type PipelineMetricsScope,
+  type TaskAnalyticsScope,
   type TimeInStageBoundary,
 } from "@/services/reports";
 import { createClient } from "@/lib/supabase/server";
@@ -43,6 +47,13 @@ const ENGAGEMENT_SCOPE_LABEL: Record<EngagementScope, string> = {
   team: "Team engagement",
   practice: "Practice engagement",
   tenant: "Tenant-wide engagement",
+};
+
+const TASK_SCOPE_LABEL: Record<TaskAnalyticsScope, string> = {
+  own: "Your task performance",
+  team: "Team task performance",
+  practice: "Practice task performance",
+  tenant: "Tenant-wide task performance",
 };
 
 function formatPercent(fraction: number): string {
@@ -378,6 +389,90 @@ function EngagementAnalyticsPanel({
   );
 }
 
+// M6.6 (docs/07-build-backlog.md): "Task analytics: on-time rate excluding cancellations, overdue
+// counts, delegation load." Gated on analytics.view_own like Pipeline metrics and Engagement
+// analytics above - a bde is never denied this panel, only narrowed to their own tasks
+// (docs/DECISIONS.md D-19). Delegation load lists only assignees who currently hold at least one
+// open task - a bde with nothing delegated to anyone else (the common case) simply sees an empty
+// table, the same "no rows" empty state the Loss reasons panel below already uses for zero losses.
+function TaskAnalyticsPanel({
+  scope,
+  completedCount,
+  onTimeCount,
+  onTimeRate,
+  overdueCount,
+  delegationLoad,
+}: {
+  scope: TaskAnalyticsScope;
+  completedCount: number;
+  onTimeCount: number;
+  onTimeRate: MetricResult<number>;
+  overdueCount: number;
+  delegationLoad: DelegationLoadRow[];
+}) {
+  return (
+    <section className="flex flex-col gap-4 rounded-token border border-line bg-raised p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-ink">{TASK_SCOPE_LABEL[scope]}</h2>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+          <dt className="text-muted">Period</dt>
+          <dd className="text-ink">All time</dd>
+          <dt className="text-muted">Comparison basis</dt>
+          <dd className="text-ink">None — single snapshot</dd>
+          <dt className="text-muted">Sample size</dt>
+          <dd className="text-ink">{completedCount} completed tasks</dd>
+          <dt className="text-muted">Exclusions</dt>
+          <dd className="text-ink">Soft-deleted and demo tasks; on-time rate excludes cancelled tasks</dd>
+        </dl>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div className="flex flex-col gap-1 rounded-token bg-surface p-4">
+          <p className="text-xs font-medium text-muted">On-time completion rate</p>
+          {onTimeRate.status === "ok" ? (
+            <p className="text-lg font-semibold text-ink">
+              {formatPercent(onTimeRate.value)}{" "}
+              <span className="text-xs font-normal text-muted">
+                ({onTimeCount} of {completedCount})
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-muted">No tasks completed yet</p>
+          )}
+        </div>
+        <div className="flex flex-col gap-1 rounded-token bg-surface p-4">
+          <p className="text-xs font-medium text-muted">Overdue tasks</p>
+          <p className="text-lg font-semibold text-ink">{overdueCount}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <h3 className="text-sm font-semibold text-ink">Delegation load</h3>
+        {delegationLoad.length === 0 ? (
+          <p className="text-sm text-muted">No open tasks in scope.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs font-medium text-muted">
+                <th className="pb-1.5 pr-4 font-medium">Assignee</th>
+                <th className="pb-1.5 text-right font-medium">Open tasks</th>
+              </tr>
+            </thead>
+            <tbody>
+              {delegationLoad.map((row) => (
+                <tr key={row.assigneeId} className="border-t border-line">
+                  <td className="py-1.5 pr-4 text-ink">{row.assigneeName}</td>
+                  <td className="py-1.5 text-right font-medium text-ink">{row.openCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // M5.4 (docs/07-build-backlog.md): "Loss-reason report by practice, value band and competitor."
 // checkRouteAccess lets every role onto /analytics at all (src/domain/navigation.ts's NAV_BY_ROLE
 // names it for everyone), but that is only the coarse "can this role type this URL" gate
@@ -423,11 +518,12 @@ export default async function AnalyticsPage() {
   const session = await getSessionActor(supabase);
   if (session.status !== "active") return <DeniedState message="Analytics is not available for your role." />;
 
-  const [pipelineMetrics, funnelResult, timeInStageResult, engagementAnalytics, lossReasonResult] = await Promise.all([
+  const [pipelineMetrics, funnelResult, timeInStageResult, engagementAnalytics, taskAnalytics, lossReasonResult] = await Promise.all([
     getPipelineMetrics(supabase, session.actor),
     getCohortConversionFunnel(supabase, session.actor),
     getTimeInStage(supabase, session.actor),
     getEngagementAnalytics(supabase, session.actor, session.timezone),
+    getTaskAnalytics(supabase, session.actor, session.timezone),
     getLossReasonReport(supabase, session.actor),
   ]);
 
@@ -452,6 +548,15 @@ export default async function AnalyticsPage() {
         loggingLatencyDays={engagementAnalytics.loggingLatencyDays}
         timeToFirstEngagementDays={engagementAnalytics.timeToFirstEngagementDays}
         nextActionCoverage={engagementAnalytics.nextActionCoverage}
+      />
+
+      <TaskAnalyticsPanel
+        scope={taskAnalytics.scope}
+        completedCount={taskAnalytics.completedCount}
+        onTimeCount={taskAnalytics.onTimeCount}
+        onTimeRate={taskAnalytics.onTimeRate}
+        overdueCount={taskAnalytics.overdueCount}
+        delegationLoad={taskAnalytics.delegationLoad}
       />
 
       {lossReasonResult.ok ? (

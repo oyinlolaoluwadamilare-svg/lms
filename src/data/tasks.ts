@@ -338,3 +338,56 @@ export async function getTeamTaskCounts(
 
   return counts;
 }
+
+export interface TaskAnalyticsRow {
+  assigneeId: string;
+  assigneeName: string;
+  status: TaskStatus;
+  dueDate: string;
+  completedAt: string | null;
+}
+
+interface TaskAnalyticsQueryRow {
+  assignee_id: string;
+  status: TaskStatus;
+  due_date: string;
+  completed_at: string | null;
+  assignee: { full_name: string } | null;
+}
+
+// M6.6 (docs/07-build-backlog.md): "Task analytics: on-time rate excluding cancellations, overdue
+// counts, delegation load." The shared rowset behind all three - one round trip, not three, the
+// same bundling getPipelineMetrics/getEngagementAnalytics already established for their own panels.
+// `memberIds: null` means tenant-wide (no assignee filter at all, relying on the caller's own
+// RLS-scoped session - task.view is tenant-wide for executive/tenant_admin, docs/02-permission-
+// matrix.md - the same "RLS coarse, service precise" split resolveTaskAnalyticsMemberIds's own
+// caller in src/services/reports.ts documents); `[]` (a resolved scope with literally nobody in it)
+// short-circuits before querying, the same guard `getTeamTaskCounts` above already uses. Reads
+// through the caller's own RLS-scoped session, not a service-role client - carrying forward
+// `getTeamTaskCounts`'s own documented privacy boundary (a deal-less personal task assigned to
+// someone else stays invisible even to their own team_lead/director, since `tasks_select`'s practice
+// branch requires a deal). `is_demo = false`: unlike `getTeamTaskCounts` (an operational "My Work"
+// view, where a demo tenant's own working session correctly SHOULD see its own demo tasks), this is
+// an Analytics-page metric query, where CLAUDE.md #6's "excluded from every metric query by default"
+// applies literally.
+export async function listTasksForAnalytics(supabase: SupabaseClient, memberIds: string[] | null): Promise<TaskAnalyticsRow[]> {
+  if (memberIds !== null && memberIds.length === 0) return [];
+
+  let query = supabase
+    .from("tasks")
+    .select("assignee_id, status, due_date, completed_at, assignee:users!assignee_id(full_name)")
+    .eq("is_demo", false)
+    .is("deleted_at", null);
+  if (memberIds !== null) query = query.in("assignee_id", memberIds);
+
+  const { data, error } = await query;
+  if (error) throw new Error(`listTasksForAnalytics failed: ${error.message}`);
+
+  return (data as unknown as TaskAnalyticsQueryRow[]).map((row) => ({
+    assigneeId: row.assignee_id,
+    assigneeName: row.assignee?.full_name ?? "Unknown",
+    status: row.status,
+    dueDate: row.due_date,
+    completedAt: row.completed_at,
+  }));
+}
