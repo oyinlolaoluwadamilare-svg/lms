@@ -230,6 +230,60 @@ export async function listStageEventsForFunnel(supabase: SupabaseClient, dealIds
   }));
 }
 
+export interface RegressionEvent {
+  dealId: string;
+  fromStageName: string | null;
+  toStageName: string;
+  occurredAt: string;
+}
+
+interface RegressionEventRow {
+  deal_id: string;
+  occurred_at: string;
+  from_stage: { name: string } | null;
+  to_stage: { name: string } | null;
+}
+
+// M6.7 (docs/07-build-backlog.md): "Stage regression report." docs/04-metric-definitions.md's own
+// "Stage regression rate" ("deals with at least one is_regression = true event... over active
+// deals") names only the headline number - asked directly (this milestone's own backlog line says
+// "report," the same word the breakdown-style Loss reasons panel uses, not just "rate"), the product
+// owner confirmed the report should also list the regressed deals themselves, not the rate alone
+// ("a leading loss indicator" is only actionable if leadership can see which deals to intervene on).
+// One row per deal - its MOST RECENT regression, not every regression event it's ever had (a deal
+// that regressed twice shows only the latest, the one still relevant to acting on it today) -
+// `.order("occurred_at", { ascending: false })` plus "first row seen per deal_id wins" is the same
+// dedup-by-latest shape `getLatestStageEventOccurredAtByDeal` above already uses.
+// `is_reconstructed = false` excludes reconstructed rows from this count-based metric too, not only
+// duration-based ones - the identical extension of docs/DECISIONS.md D-16's own reasoning
+// `listStageEventsForFunnel` above already applies for Cohort conversion rate, a structurally
+// identical "count of deals with at least one qualifying event" metric.
+export async function listMostRecentRegressionEventsForDeals(supabase: SupabaseClient, dealIds: string[]): Promise<RegressionEvent[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("stage_events")
+    .select("deal_id, occurred_at, from_stage:pipeline_stages!from_stage_id(name), to_stage:pipeline_stages!to_stage_id(name)")
+    .in("deal_id", dealIds)
+    .eq("is_regression", true)
+    .eq("is_reconstructed", false)
+    .order("occurred_at", { ascending: false });
+
+  if (error) throw new Error(`listMostRecentRegressionEventsForDeals failed: ${error.message}`);
+
+  const seen = new Set<string>();
+  const events: RegressionEvent[] = [];
+  for (const row of data as unknown as RegressionEventRow[]) {
+    if (seen.has(row.deal_id)) continue;
+    seen.add(row.deal_id);
+    if (!row.to_stage) {
+      throw new Error(`stage_events row for deal ${row.deal_id} has no resolvable to_stage (to_stage_id is not-null, but the join returned nothing)`);
+    }
+    events.push({ dealId: row.deal_id, fromStageName: row.from_stage?.name ?? null, toStageName: row.to_stage.name, occurredAt: row.occurred_at });
+  }
+  return events;
+}
+
 export interface StageDuration {
   fromStageId: string;
   durationInPreviousSeconds: number;

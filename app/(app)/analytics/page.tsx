@@ -1,13 +1,14 @@
 import { ACTIVITY_TYPE_LABELS, OUTCOME_DISPOSITIONS, OUTCOME_DISPOSITION_LABELS } from "@/domain/activity";
 import type { MetricResult } from "@/domain/metrics";
 import { formatMoney, type Money } from "@/domain/money";
-import { formatDurationSeconds } from "@/lib/dates";
+import { formatDateInTimezone, formatDurationSeconds } from "@/lib/dates";
 import { getSessionActor } from "@/services/actor";
 import {
   getCohortConversionFunnel,
   getEngagementAnalytics,
   getLossReasonReport,
   getPipelineMetrics,
+  getStageRegressionReport,
   getTaskAnalytics,
   getTimeInStage,
   type CategoryForecastEntry,
@@ -18,6 +19,8 @@ import {
   type FunnelBoundary,
   type LossReasonBreakdown,
   type PipelineMetricsScope,
+  type RegressedDeal,
+  type StageRegressionScope,
   type TaskAnalyticsScope,
   type TimeInStageBoundary,
 } from "@/services/reports";
@@ -54,6 +57,13 @@ const TASK_SCOPE_LABEL: Record<TaskAnalyticsScope, string> = {
   team: "Team task performance",
   practice: "Practice task performance",
   tenant: "Tenant-wide task performance",
+};
+
+const REGRESSION_SCOPE_LABEL: Record<StageRegressionScope, string> = {
+  own: "Your stage regressions",
+  team: "Team stage regressions",
+  practice: "Practice stage regressions",
+  tenant: "Tenant-wide stage regressions",
 };
 
 function formatPercent(fraction: number): string {
@@ -473,6 +483,94 @@ function TaskAnalyticsPanel({
   );
 }
 
+// M6.7 (docs/07-build-backlog.md): "Stage regression report." Gated on analytics.view_own like
+// Pipeline metrics, Engagement analytics and Task analytics above - a bde is never denied, only
+// narrowed to their own deals (docs/DECISIONS.md D-20). Unlike those panels' own tiles-only shape,
+// this one also lists the regressed deals themselves - the report's own "leading loss indicator" is
+// only actionable if leadership can see which deals to intervene on, the same reasoning the Loss
+// reasons panel below already applies to its own breakdowns.
+function StageRegressionPanel({
+  scope,
+  activeDealCount,
+  regressedCount,
+  rate,
+  regressedDeals,
+  timezone,
+}: {
+  scope: StageRegressionScope;
+  activeDealCount: number;
+  regressedCount: number;
+  rate: MetricResult<number>;
+  regressedDeals: RegressedDeal[];
+  timezone: string;
+}) {
+  return (
+    <section className="flex flex-col gap-4 rounded-token border border-line bg-raised p-6">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-lg font-semibold text-ink">{REGRESSION_SCOPE_LABEL[scope]}</h2>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+          <dt className="text-muted">Period</dt>
+          <dd className="text-ink">All time</dd>
+          <dt className="text-muted">Comparison basis</dt>
+          <dd className="text-ink">None — single snapshot</dd>
+          <dt className="text-muted">Sample size</dt>
+          <dd className="text-ink">{activeDealCount} active deals</dd>
+          <dt className="text-muted">Exclusions</dt>
+          <dd className="text-ink">Soft-deleted and demo deals, and reconstructed stage events</dd>
+        </dl>
+      </div>
+
+      <div className="flex flex-col gap-1 rounded-token bg-surface p-4 sm:max-w-xs">
+        <p className="text-xs font-medium text-muted">Stage regression rate</p>
+        {rate.status === "ok" ? (
+          <p className="text-lg font-semibold text-ink">
+            {formatPercent(rate.value)}{" "}
+            <span className="text-xs font-normal text-muted">
+              ({regressedCount} of {activeDealCount})
+            </span>
+          </p>
+        ) : (
+          <p className="text-sm text-muted">No active deals</p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <h3 className="text-sm font-semibold text-ink">Regressed deals</h3>
+        {regressedDeals.length === 0 ? (
+          <p className="text-sm text-muted">No regressions in scope.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs font-medium text-muted">
+                  <th className="pb-1.5 pr-4 font-medium">Deal</th>
+                  <th className="pb-1.5 pr-4 font-medium">Regressed</th>
+                  <th className="pb-1.5 pr-4 font-medium">Current stage</th>
+                  <th className="pb-1.5 font-medium">When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {regressedDeals.map((deal) => (
+                  <tr key={deal.dealId} className="border-t border-line">
+                    <td className="py-1.5 pr-4 text-ink">
+                      {deal.reference} · {deal.name}
+                    </td>
+                    <td className="py-1.5 pr-4 text-ink">
+                      {deal.fromStageName ?? "—"} → {deal.toStageName}
+                    </td>
+                    <td className="py-1.5 pr-4 text-ink">{deal.currentStageName}</td>
+                    <td className="py-1.5 text-ink">{formatDateInTimezone(deal.occurredAt, timezone)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 // M5.4 (docs/07-build-backlog.md): "Loss-reason report by practice, value band and competitor."
 // checkRouteAccess lets every role onto /analytics at all (src/domain/navigation.ts's NAV_BY_ROLE
 // names it for everyone), but that is only the coarse "can this role type this URL" gate
@@ -518,14 +616,16 @@ export default async function AnalyticsPage() {
   const session = await getSessionActor(supabase);
   if (session.status !== "active") return <DeniedState message="Analytics is not available for your role." />;
 
-  const [pipelineMetrics, funnelResult, timeInStageResult, engagementAnalytics, taskAnalytics, lossReasonResult] = await Promise.all([
-    getPipelineMetrics(supabase, session.actor),
-    getCohortConversionFunnel(supabase, session.actor),
-    getTimeInStage(supabase, session.actor),
-    getEngagementAnalytics(supabase, session.actor, session.timezone),
-    getTaskAnalytics(supabase, session.actor, session.timezone),
-    getLossReasonReport(supabase, session.actor),
-  ]);
+  const [pipelineMetrics, funnelResult, timeInStageResult, engagementAnalytics, taskAnalytics, stageRegressionReport, lossReasonResult] =
+    await Promise.all([
+      getPipelineMetrics(supabase, session.actor),
+      getCohortConversionFunnel(supabase, session.actor),
+      getTimeInStage(supabase, session.actor),
+      getEngagementAnalytics(supabase, session.actor, session.timezone),
+      getTaskAnalytics(supabase, session.actor, session.timezone),
+      getStageRegressionReport(supabase, session.actor),
+      getLossReasonReport(supabase, session.actor),
+    ]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -557,6 +657,15 @@ export default async function AnalyticsPage() {
         onTimeRate={taskAnalytics.onTimeRate}
         overdueCount={taskAnalytics.overdueCount}
         delegationLoad={taskAnalytics.delegationLoad}
+      />
+
+      <StageRegressionPanel
+        scope={stageRegressionReport.scope}
+        activeDealCount={stageRegressionReport.activeDealCount}
+        regressedCount={stageRegressionReport.regressedCount}
+        rate={stageRegressionReport.rate}
+        regressedDeals={stageRegressionReport.regressedDeals}
+        timezone={session.timezone}
       />
 
       {lossReasonResult.ok ? (

@@ -93,6 +93,14 @@ async function findOrCreateDeal(reference: string, practiceLineId: string, owner
   );
 }
 
+// Find-or-UPDATE, not plain find-or-create: `daysAgoDate(5)`/`daysFromNowDate(5)` are relative to
+// the moment this fixture runs, but a title-matched existing row would otherwise keep whatever
+// due_date an earlier run computed - once enough real wall-clock time passes since that first run,
+// a task seeded as "not yet due" silently becomes actually overdue, and this spec's own hand-computed
+// counts go stale without any code change to explain it. Refreshing due_date/status/extra on every
+// run keeps the fixture's meaning ("overdue," "not yet due") true regardless of when the suite last
+// ran, the same reasoning a real due-date-relative fixture always needs and a fixed-date one (like
+// the 2026-01-10 on-time/late/cancelled tasks below) does not.
 async function findOrCreateTask(
   title: string,
   dealId: string,
@@ -102,7 +110,11 @@ async function findOrCreateTask(
   extra: Record<string, unknown> = {},
 ): Promise<void> {
   const { data: existing } = await service.from("tasks").select("id").eq("tenant_id", ids.tenantId).eq("title", title).maybeSingle();
-  if (existing) return;
+  if (existing) {
+    const { error: updateError } = await service.from("tasks").update({ due_date: dueDate, status, ...extra }).eq("id", existing.id);
+    if (updateError) throw new Error(`refresh task "${title}" failed: ${updateError.message}`);
+    return;
+  }
 
   const { error } = await service.from("tasks").insert({
     tenant_id: ids.tenantId,

@@ -2775,6 +2775,58 @@ no schema change), integration (197, 5 new, run against the real hosted project 
 existing suite with no regressions), and manual browser QA of the new panel across
 bde/team_lead/director/executive sessions, against the real hosted project, all green.
 
+**M6.7** ("Stage regression report.") had the same shape of gap M6.6 did: `docs/04-metric-
+definitions.md`'s own "Stage regression rate" formula ("deals with at least one `is_regression =
+true` event in the period, over active deals") states no scope, and the backlog line's own word
+"report" (not "rate") left open how much beyond the headline number to show. Asked directly rather
+than assumed (**D-20**): the same own/team/practice/tenant model M6.1/M6.5/M6.6 already use, gated on
+`analytics.view_own` - a bde is never denied, only narrowed to their own deals - and the report also
+lists the regressed deals themselves (deal, current stage, from/to stage of the most recent
+regression, when it happened, most-recent-first), not the rate alone, since "a leading loss indicator"
+is only actionable if leadership can see which deals to intervene on.
+
+**Reused rather than re-derived**: the own/team/practice/tenant scope resolver M6.5 built
+(`resolveEngagementDeals`) is renamed to `resolveScopedActiveDeals` and shared by
+`getStageRegressionReport` - this milestone's own scope answer confirmed it needs the identical
+active-deal population Engagement/Task analytics already resolve, so the director-dominates/
+team-via-`manager_id`/own-via-co-ownership logic is written once, not a third time. Reconstructed
+`stage_events` rows (`is_reconstructed = true`) are excluded from the regressed-deal count too,
+extending decision **D-16**'s own reasoning (a count-based "has this event" metric, not a duration-
+based one, but the same "migration artefact, not real activity" logic applies) rather than a fresh
+invention - currently inert either way, since no code path in this codebase sets
+`is_reconstructed = true`.
+
+**One test-fixture bug found and fixed while verifying this milestone, unrelated to its own new
+code**: `tests/integration/task-analytics.spec.ts` (M6.6) and `tests/integration/engagement-
+analytics.spec.ts` (M6.5) both seed rows with dates computed relative to "now" (`daysAgoDate(5)`,
+`daysFromNowDate(5)`) inside a find-or-create helper that skipped re-seeding once a title/summary
+match already existed - so a task seeded as "not yet due" on one run had silently become actually
+overdue six days later on this one, and Task analytics' own hand-computed scope-boundary counts
+failed for the first time without any code change to explain why. Both helpers now update
+`due_date`/`activity_date` (and `status`) on every run instead of skipping, so the fixtures stay true
+to their own names regardless of how much wall-clock time has passed since they were first seeded -
+found by running the full integration suite as this milestone's own last verification step, not
+something M6.7's own new code caused.
+
+New `tests/integration/stage-regression.spec.ts` (5 tests) proves `getStageRegressionReport` end to
+end against a fixture built specifically to exercise every scope boundary and the reconstructed-event
+exclusion at once: a bde's own real 1-of-3 regression rate with a reconstructed-only regression on a
+separate deal never counted, a team_lead's "team" scope excluding a same-practice bde's own
+regression, a director's "practice" scope including it, an executive's tenant-wide scope adding a
+second practice's regression on top, and a bde with zero deals reading `insufficient_data` without
+ever being denied. Manual browser QA against the real hosted project (the seed tenant carries no
+stage-history fixture data, so every scope correctly rendered the same insufficient-data/empty-list
+states the integration tests exercise numerically) confirmed the new "Stage regressions" panel renders
+the correct scope label ("Your stage regressions" / "Team stage regressions" / "Practice stage
+regressions" / "Tenant-wide stage regressions") with no console errors, for a
+bde/team_lead/director/executive session respectively.
+
+Verified: typecheck, lint, unit/permission/layering (356, unchanged - no new permission action this
+milestone), RLS (289, unchanged - no schema change), integration (202, 5 new, run against the real
+hosted project alongside the full existing suite with no regressions, including the two now-fixed
+pre-existing fixtures), e2e (11, unchanged), and manual browser QA of the new panel across
+bde/team_lead/director/executive sessions, against the real hosted project, all green.
+
 ## Commands
 
 ```

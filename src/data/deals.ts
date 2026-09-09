@@ -508,6 +508,41 @@ export async function listActiveDealsForEngagementAnalytics(
   );
 }
 
+export interface DealSummary {
+  id: string;
+  reference: string;
+  name: string;
+  currentStageName: string;
+}
+
+interface DealSummaryRow {
+  id: string;
+  reference: string;
+  name: string;
+  pipeline_stages: { name: string } | null;
+}
+
+// M6.7 (docs/07-build-backlog.md): "Stage regression report." The small, display-only lookup behind
+// the report's own deal list - reference/name/current-stage-name for exactly the (typically small)
+// set of deals `listMostRecentRegressionEventsForDeals` already identified as regressed, not a
+// general-purpose "any deal by id" getter. Deliberately separate from
+// `listActiveDealsForEngagementAnalytics`'s own row shape - that one carries owner/author/next-action
+// for scope resolution and coverage math, none of which this report needs, and this one carries
+// reference/name/stage for display, none of which that resolver needs.
+export async function listDealSummariesByIds(supabase: SupabaseClient, dealIds: string[]): Promise<DealSummary[]> {
+  if (dealIds.length === 0) return [];
+
+  const { data, error } = await supabase.from("deals").select("id, reference, name, pipeline_stages(name)").in("id", dealIds);
+  if (error) throw new Error(`listDealSummariesByIds failed: ${error.message}`);
+
+  return (data as unknown as DealSummaryRow[]).map((row) => {
+    if (!row.pipeline_stages) {
+      throw new Error(`deal ${row.id} has no resolvable current stage (stage_id is not-null, but the join returned nothing)`);
+    }
+    return { id: row.id, reference: row.reference, name: row.name, currentStageName: row.pipeline_stages.name };
+  });
+}
+
 export interface DealForAuthorization {
   id: string;
   tenantId: string;

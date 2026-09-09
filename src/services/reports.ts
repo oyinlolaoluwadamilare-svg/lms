@@ -7,11 +7,12 @@ import {
   listActiveDealsForEngagementAnalytics,
   listActiveDealsForPipelineMetrics,
   listDealIdsForCohortFunnel,
+  listDealSummariesByIds,
   type EngagementAnalyticsDealRow,
 } from "@/data/deals";
 import { listAllStages, listStagesWithBottleneckThreshold } from "@/data/pipelineStages";
 import { listPracticeLines } from "@/data/practiceLines";
-import { listStageDurationsForDeals, listStageEventsForFunnel } from "@/data/stageEvents";
+import { listMostRecentRegressionEventsForDeals, listStageDurationsForDeals, listStageEventsForFunnel } from "@/data/stageEvents";
 import { listTasksForAnalytics } from "@/data/tasks";
 import { listDirectReports, listTeamMembersForPractice } from "@/data/users";
 import { ACTIVITY_TYPES, OUTCOME_DISPOSITIONS, type ActivityType, type OutcomeDisposition } from "@/domain/activity";
@@ -359,10 +360,17 @@ export async function getTimeInStage(supabase: SupabaseClient, actor: Actor): Pr
 // "own".
 export type EngagementScope = "own" | "team" | "practice" | "tenant";
 
-async function resolveEngagementDeals(
+// Originally named resolveEngagementDeals (M6.5) - renamed once M6.7's Stage regression report
+// confirmed (asked directly, docs/DECISIONS.md D-19) it needs the identical own/team/practice/tenant
+// active-deal scope, not the practice/tenant-only model Cohort funnel/Time in stage/Loss reasons use.
+// Rather than re-deriving the same director-dominates/team-via-manager_id/own-via-co-ownership logic
+// a third time, both callers share this one resolver; each keeps its own named scope type
+// (EngagementScope / StageRegressionScope below) at its own public boundary, since the two are
+// structurally identical string unions and TypeScript accepts the assignment without a cast.
+async function resolveScopedActiveDeals(
   supabase: SupabaseClient,
   actor: Actor,
-): Promise<{ scope: EngagementScope; deals: EngagementAnalyticsDealRow[] }> {
+): Promise<{ scope: "own" | "team" | "practice" | "tenant"; deals: EngagementAnalyticsDealRow[] }> {
   const isTenantWide = actor.roleGrants.some((grant) => grant.role === "executive" || grant.role === "tenant_admin");
   if (isTenantWide) {
     return { scope: "tenant", deals: await listActiveDealsForEngagementAnalytics(supabase, null) };
@@ -440,7 +448,7 @@ export interface EngagementAnalytics {
 }
 
 // docs/04-metric-definitions.md's five metrics, each implemented literally against the one shared
-// deal/activity rowset resolveEngagementDeals assembles above - one round trip per table, not five:
+// deal/activity rowset resolveScopedActiveDeals assembles above - one round trip per table, not five:
 //
 // - "Engagement coverage": active deals with >=1 client-facing activity in the trailing 14 days,
 //   over all active deals.
@@ -479,7 +487,7 @@ export interface EngagementAnalytics {
 // undefined (division by zero, or median()/mean() of an empty array, which both throw rather than
 // silently returning 0 - src/domain/metrics.ts's own comment already explains why).
 export async function getEngagementAnalytics(supabase: SupabaseClient, actor: Actor, timezone: string, now: Date = new Date()): Promise<EngagementAnalytics> {
-  const { scope, deals } = await resolveEngagementDeals(supabase, actor);
+  const { scope, deals } = await resolveScopedActiveDeals(supabase, actor);
   const dealIds = deals.map((deal) => deal.id);
   const activities = await listActivitiesForEngagementAnalytics(supabase, dealIds);
 
@@ -571,7 +579,7 @@ async function resolveTaskAnalyticsMemberIds(supabase: SupabaseClient, actor: Ac
   if (isTenantWide) return { scope: "tenant", memberIds: null };
 
   // A Director's own grant dominates a Team Lead's in the rare mixed-grant case - the same
-  // simplification resolveEngagementDeals above (M6.5) already applies, for the identical reason:
+  // simplification resolveScopedActiveDeals above (M6.5) already applies, for the identical reason:
   // practice-wide was never ambiguous, only "team" was.
   const hasDirectorGrant = actor.roleGrants.some((grant) => grant.role === "director" && grant.practiceLineId);
   const leaderPracticeLineIds = actor.roleGrants
@@ -593,7 +601,7 @@ async function resolveTaskAnalyticsMemberIds(supabase: SupabaseClient, actor: Ac
   }
 
   // own - a bde (or an actor with no working-role grant at all, the same defensive fallback
-  // resolveEngagementDeals above documents).
+  // resolveScopedActiveDeals above documents).
   return { scope: "own", memberIds: [actor.id] };
 }
 
@@ -659,4 +667,69 @@ export async function getTaskAnalytics(supabase: SupabaseClient, actor: Actor, t
   const delegationLoad = [...loadByAssignee.values()].sort((a, b) => b.openCount - a.openCount || a.assigneeName.localeCompare(b.assigneeName));
 
   return { scope, completedCount: completedRows.length, onTimeCount, onTimeRate, overdueCount, delegationLoad };
+}
+
+// M6.7 (docs/07-build-backlog.md): "Stage regression report." docs/04-metric-definitions.md's own
+// formula names only the headline rate ("deals with at least one is_regression = true event in the
+// period, over active deals") - asked directly on two open questions (docs/DECISIONS.md D-20): scope
+// (the same own/team/practice/tenant model M6.1/M6.5/M6.6 already use, gated on analytics.view_own,
+// over the practice/tenant-only model Cohort funnel/Time in stage/Loss reasons use), and report depth
+// (the actual list of regressed deals, not the rate alone - "a leading loss indicator" is only
+// actionable if leadership can see which deals to intervene on).
+//
+// Reuses resolveScopedActiveDeals (M6.5, renamed above) rather than re-deriving the same
+// own/team/practice/tenant resolution logic a third time - this milestone's own scope answer
+// confirmed it needs the identical active-deal population Engagement/Task analytics already resolve.
+export type StageRegressionScope = "own" | "team" | "practice" | "tenant";
+
+export interface RegressedDeal {
+  dealId: string;
+  reference: string;
+  name: string;
+  currentStageName: string;
+  fromStageName: string | null;
+  toStageName: string;
+  occurredAt: string;
+}
+
+export interface StageRegressionReport {
+  scope: StageRegressionScope;
+  activeDealCount: number;
+  regressedCount: number;
+  rate: MetricResult<number>;
+  regressedDeals: RegressedDeal[];
+}
+
+export async function getStageRegressionReport(supabase: SupabaseClient, actor: Actor): Promise<StageRegressionReport> {
+  const { scope, deals } = await resolveScopedActiveDeals(supabase, actor);
+  const dealIds = deals.map((deal) => deal.id);
+
+  const regressionEvents = await listMostRecentRegressionEventsForDeals(supabase, dealIds);
+  const rate = withMinimumSample(deals.length, 1, () => regressionEvents.length / deals.length);
+
+  const summaries = await listDealSummariesByIds(
+    supabase,
+    regressionEvents.map((event) => event.dealId),
+  );
+  const summaryById = new Map(summaries.map((summary) => [summary.id, summary]));
+
+  // Most recently regressed first - the most urgent to act on, the same "newest first" ordering
+  // listStageEventsForDeal's own stage-history panel already uses.
+  const regressedDeals: RegressedDeal[] = regressionEvents
+    .map((event) => {
+      const summary = summaryById.get(event.dealId);
+      if (!summary) throw new Error(`regressed deal ${event.dealId} has no resolvable summary (deal_id is not-null, but the lookup returned nothing)`);
+      return {
+        dealId: event.dealId,
+        reference: summary.reference,
+        name: summary.name,
+        currentStageName: summary.currentStageName,
+        fromStageName: event.fromStageName,
+        toStageName: event.toStageName,
+        occurredAt: event.occurredAt,
+      };
+    })
+    .sort((a, b) => b.occurredAt.localeCompare(a.occurredAt));
+
+  return { scope, activeDealCount: deals.length, regressedCount: regressionEvents.length, rate, regressedDeals };
 }

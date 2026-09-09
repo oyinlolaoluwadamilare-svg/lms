@@ -83,6 +83,13 @@ async function findOrCreateDeal(reference: string, practiceLineId: string, owner
   );
 }
 
+// Find-or-UPDATE, not plain find-or-create: `daysAgoDate(5)`/`daysAgoDate(20)` are relative to the
+// moment this fixture runs, not fixed calendar dates - a title-matched existing row would otherwise
+// keep whatever activity_date an earlier run computed, and this file's own 14-day coverage-window
+// assertions would silently start failing days later as real time passes it by, with no code change
+// to explain why. Refreshing activity_date on every run keeps "5 days ago"/"20 days ago" true
+// regardless of when the suite last ran - the identical staleness class
+// tests/integration/task-analytics.spec.ts's own findOrCreateTask fix addresses for due dates (M6.7).
 async function findOrCreateActivity(
   dealId: string,
   summary: string,
@@ -92,7 +99,11 @@ async function findOrCreateActivity(
   outcomeDisposition: string | null,
 ): Promise<void> {
   const { data: existing } = await service.from("activities").select("id").eq("deal_id", dealId).eq("summary", summary).maybeSingle();
-  if (existing) return;
+  if (existing) {
+    const { error: updateError } = await service.from("activities").update({ activity_date: activityDate }).eq("id", existing.id);
+    if (updateError) throw new Error(`refresh activity "${summary}" for deal ${dealId} failed: ${updateError.message}`);
+    return;
+  }
 
   const { error } = await service.from("activities").insert({
     tenant_id: ids.tenantId,
